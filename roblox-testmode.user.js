@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.1
+// @version      1.2
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -30,6 +30,7 @@
     owned: [],
     enabled: true,
     reloadAfterPurchase: true,
+    netLog: [],     // dernières requêtes POST vers Roblox, pour diagnostic
     me: null,       // vrai compte connecté : { id, name, displayName }
     spoof: null     // identité empruntée : { id, name, displayName, hasVerifiedBadge, ... }
   };
@@ -252,6 +253,19 @@
         padding: 10px 0; border-top: 1px solid var(--rbx-divider);
         font-size: 14px; color: var(--rbx-muted);
       }
+      #${PANEL_ID} .rbx-tm-log { list-style: none; margin: 8px 0 0; padding: 0; }
+      #${PANEL_ID} .rbx-tm-log li {
+        display: flex; align-items: baseline; gap: 8px;
+        padding: 8px 0; border-top: 1px solid var(--rbx-divider);
+        font-size: 12px; word-break: break-all;
+      }
+      #${PANEL_ID} .rbx-tm-log .rbx-tm-tag {
+        flex: none; font-weight: 700; font-size: 10px; text-transform: uppercase;
+        letter-spacing: .06em; padding: 3px 6px; border-radius: 5px;
+        background: var(--rbx-subtle); color: var(--rbx-muted);
+      }
+      #${PANEL_ID} .rbx-tm-log .rbx-tm-tag.rbx-tm-yes { background: #1f7a3d; color: #fff; }
+      #${PANEL_ID} .rbx-tm-log .rbx-tm-tag.rbx-tm-no { background: var(--rbx-red); color: #fff; }
       #${PANEL_ID} .rbx-tm-empty { color: var(--rbx-muted); font-size: 14px; margin: 12px 0 0; }
       #${PANEL_ID} .rbx-tm-note { color: var(--rbx-muted); font-size: 12px; margin: 16px 0 0; }
 
@@ -678,13 +692,13 @@
   }
 
   // ---------- 5. INTERCEPTION RÉSEAU ----------
-  // Ces motifs doivent viser l'acte d'achat, et lui seul : le marketplace
-  // interroge « marketplace-sales/…/item » rien que pour afficher un article.
-  const PURCHASE_PATTERNS = [
-    /economy\.roblox\.com\/v\d+\/purchases\/products\/\d+/,
-    /marketplace-sales\/v\d+\/item\/[\w-]+\/purchase-item/,
-    /\/v1\/gamepass\/\d+\/purchase\b/
-  ];
+  // Un motif trop précis rate les endpoints d'achat que Roblox renomme, et la
+  // requête part alors pour de vrai. Le tri repose donc sur la méthode — un
+  // achat est toujours un POST — plutôt que sur une liste d'URL exactes.
+  const PURCHASE_RE = /purchase/i;
+
+  // Ces chemins-là contiennent « purchase » sans être des achats.
+  const NOT_PURCHASE_RE = /(details|resellers|resale|history|eligib|can-purchase|purchasable)/i;
 
   const CURRENCY_PATTERNS = [
     /economy\.roblox\.com\/v1\/user\/currency/,
@@ -693,10 +707,23 @@
     /\/v1\/users\/\d+\/currency\/?(\?|$)/
   ];
 
-  // La méthode compte autant que l'URL : un GET ne peut pas être un achat.
+  // La méthode compte autant que l'URL : un GET ne peut pas être un achat, et
+  // c'est ce qui protège l'affichage du marketplace.
   const isPurchase = (url, method) =>
     state.enabled && String(method).toUpperCase() === 'POST' &&
-    PURCHASE_PATTERNS.some(re => re.test(url));
+    PURCHASE_RE.test(url) && !NOT_PURCHASE_RE.test(url);
+
+  // Sans console sur iPad, ce journal est le seul moyen de voir quelle requête
+  // Roblox envoie vraiment au moment d'un achat. Il est conservé d'un
+  // chargement à l'autre, puisque la page se recharge juste après.
+  function logRequest(url, method, traite) {
+    if (String(method).toUpperCase() !== 'POST') return;
+    if (!/roblox\.com/.test(url)) return;
+    state.netLog = (state.netLog || []).slice(-14);
+    state.netLog.push({ u: String(url).slice(0, 220), traite: !!traite, at: new Date().toISOString() });
+    save();
+    renderPanel();
+  }
   const isCurrency = (url) => state.enabled && CURRENCY_PATTERNS.some(re => re.test(url));
 
   // Toute réponse JSON qui nous intéresse passe ici, quel que soit le transport.
@@ -1027,7 +1054,10 @@
     const url = typeof input === 'string' ? input : (input && input.url) || '';
     const method = String((init && init.method) || (input && input.method) || 'GET');
 
-    if (isPurchase(url, method)) {
+    const achat = isPurchase(url, method);
+    logRequest(url, method, achat);
+
+    if (achat) {
       const item = applyPurchase(url, init && init.body, 0);
       return new Response(purchaseResponseBody(item), {
         status: 200, headers: { 'Content-Type': 'application/json' }
@@ -1087,7 +1117,10 @@
   XHR.prototype.send = function (body) {
     const url = this.__rbxUrl || '';
 
-    if (isPurchase(url, this.__rbxMethod)) {
+    const achat = isPurchase(url, this.__rbxMethod);
+    logRequest(url, this.__rbxMethod, achat);
+
+    if (achat) {
       // On ne laisse PAS partir la requête : on fabrique la réponse.
       const item = applyPurchase(url, body, 0);
       fakeXhrResponse(this, purchaseResponseBody(item));
@@ -1276,6 +1309,25 @@
         </div>
         <p class="rbx-tm-note">Local uniquement : rien n'est envoyé à Roblox, aucun Robux réel n'est débité ni crédité, aucun article n'est réellement acquis.</p>
       </div>
+
+      <div class="rbx-tm-card">
+        <div class="rbx-tm-head">
+          <h2>Journal réseau</h2>
+          <span class="rbx-tm-badge rbx-tm-count" data-role="log-count">0</span>
+        </div>
+        <p class="rbx-tm-sub">Les dernières requêtes POST envoyées à Roblox. Si un achat reste bloqué, c'est ici qu'on voit si sa requête a été reconnue ou laissée passer.</p>
+
+        <div class="rbx-tm-row rbx-tm-block rbx-tm-bare">
+          <ul class="rbx-tm-log" data-role="log"></ul>
+          <p class="rbx-tm-empty" data-role="log-empty">Aucune requête enregistrée.</p>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Journal</span>
+          <span class="rbx-tm-right rbx-tm-chips">
+            <button class="rbx-tm-btn" data-act="clear-log" type="button">Vider</button>
+          </span>
+        </div>
+      </div>
     `;
 
     el.addEventListener('click', (e) => {
@@ -1299,6 +1351,8 @@
         state.balance = 0;
       } else if (btn.dataset.act === 'clear-inv') {
         state.owned = [];
+      } else if (btn.dataset.act === 'clear-log') {
+        state.netLog = [];
       } else if (btn.dataset.act === 'reset') {
         Object.assign(state, DEFAULTS, { owned: [], me: state.me });
         lookupState = { busy: false, error: '', found: null };
@@ -1420,6 +1474,14 @@
     q('[data-role="real"]').textContent = state.me
       ? state.me.displayName + ' (@' + state.me.name + ')'
       : 'non identifié';
+
+    const journal = state.netLog || [];
+    q('[data-role="log-count"]').textContent = journal.length;
+    q('[data-role="log-empty"]').style.display = journal.length ? 'none' : '';
+    q('[data-role="log"]').innerHTML = journal.slice().reverse().map(e =>
+      '<li><span class="rbx-tm-tag ' + (e.traite ? 'rbx-tm-yes">achat simulé' : 'rbx-tm-no">laissé passer') +
+      '</span><span>' + esc(e.u.replace(/^https:\/\//, '')) + '</span></li>'
+    ).join('');
 
     q('[data-role="count"]').textContent = state.owned.length;
     q('[data-role="inv"]').innerHTML = invHtml();
