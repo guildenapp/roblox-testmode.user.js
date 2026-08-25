@@ -2,10 +2,10 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      0.5
+// @version      0.6
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
-// @description  Bac à sable local : affiche un solde fictif, simule les achats catalogue et ajoute un panneau de réglage aux couleurs de Roblox dans les paramètres. Rien n'est envoyé à Roblox.
+// @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
 // @match        https://*.roblox.com/*
 // @run-at       document-start
 // @grant        none
@@ -22,17 +22,28 @@
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
   const STORAGE_KEY = 'rbx_testmode_state';
+  const RELOAD_DELAY = 2200;      // laisse la confirmation d'achat de Roblox s'afficher
   // ----------------------------
 
-  const DEFAULTS = { balance: FAKE_BALANCE, owned: [], enabled: true };
+  const DEFAULTS = {
+    balance: FAKE_BALANCE,
+    owned: [],
+    enabled: true,
+    reloadAfterPurchase: true,
+    me: null,       // vrai compte connecté : { id, name, displayName }
+    spoof: null     // identité empruntée : { id, name, displayName, hasVerifiedBadge, ... }
+  };
 
   const state = load();
 
   function load() {
     try {
-      return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(STORAGE_KEY)) || {});
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+      const s = Object.assign({}, DEFAULTS, raw);
+      if (!Array.isArray(s.owned)) s.owned = [];
+      return s;
     } catch {
-      return Object.assign({}, DEFAULTS);
+      return Object.assign({}, DEFAULTS, { owned: [] });
     }
   }
   function save() {
@@ -40,11 +51,16 @@
   }
 
   const fmt = (n) => Number(n || 0).toLocaleString('fr-FR');
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-  // ---------- 1. BANDEAU TEST MODE ----------
-  // Volontairement impossible à masquer sans éditer ce fichier.
+  // Références capturées avant nos propres correctifs, pour nos requêtes à nous.
+  const origFetch = window.fetch && window.fetch.bind(window);
+
+  // ---------- IDENTIFIANTS VISUELS ----------
   const BANNER_ID = 'rbx-testmode-banner';
   const PANEL_ID = 'rbx-testmode-panel';
+  const BAR_H = 34;
 
   // Hexagone évidé : la même forme que l'icône Robux du site.
   const ROBUX_ICON =
@@ -52,23 +68,12 @@
     '<path fill="currentColor" fill-rule="evenodd" d="M12 1.5 21.09 6.75v10.5L12 22.5 2.91 17.25V6.75L12 1.5Z' +
     'M12 7 7.67 9.5v5L12 17l4.33-2.5v-5L12 7Z"/></svg>';
 
-  // Roblox marque son thème sur <body> ; on s'y aligne au lieu de suivre l'OS,
-  // sinon le panneau s'affiche en sombre sur un site resté en clair.
-  function currentTheme() {
-    const cls = document.body ? document.body.className : '';
-    if (/\bdark-theme\b/.test(cls)) return 'dark';
-    if (/\blight-theme\b/.test(cls)) return 'light';
-    return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
-  }
+  const VERIFIED_ICON =
+    '<svg class="rbx-tm-verified" viewBox="0 0 24 24" aria-label="Compte vérifié">' +
+    '<circle cx="12" cy="12" r="10" fill="#0066ff"/>' +
+    '<path fill="#fff" d="m10.6 16.2-4-4 1.4-1.4 2.6 2.6 5.4-5.4 1.4 1.4z"/></svg>';
 
-  function syncTheme() {
-    if (!panelEl || !panelEl.isConnected) return;
-    const t = currentTheme();
-    // On n'écrit que si ça change : sinon le MutationObserver se rappellerait lui-même.
-    if (panelEl.dataset.rbxTheme !== t) panelEl.dataset.rbxTheme = t;
-  }
-  const BAR_H = 34;
-
+  // ---------- 1. STYLES ----------
   function injectStyle() {
     if (document.getElementById('rbx-testmode-style')) return;
     const s = document.createElement('style');
@@ -97,15 +102,10 @@
         --rbx-blue-dark: #2b51d9;
         --rbx-red: #b3261e;
 
-        background: var(--rbx-card);
-        border: 1px solid var(--rbx-border);
-        border-radius: 12px;
-        padding: 20px 24px;
-        margin: 0 0 24px;
-        color: var(--rbx-text);
+        display: block; background: none; border: 0; padding: 0;
+        margin: 0 0 24px; color: var(--rbx-text);
         /* On hérite de la police de Roblox (Builder Sans) : rien à déclarer. */
-        font-size: 15px; line-height: 1.4;
-        box-sizing: border-box;
+        font-size: 15px; line-height: 1.4; box-sizing: border-box;
       }
       #${PANEL_ID}[data-rbx-theme="dark"] {
         --rbx-card: #2f3133;
@@ -116,12 +116,17 @@
         --rbx-subtle: #393b3d;
       }
       #${PANEL_ID}.rbx-panel-floating {
-        position: fixed; top: 12px; right: 12px; width: 360px;
+        position: fixed; top: 12px; right: 12px; width: 380px;
         max-height: calc(100vh - ${BAR_H + 24}px); overflow: auto;
-        z-index: 2147483646; box-shadow: 0 8px 30px rgba(0,0,0,.24);
+        z-index: 2147483646;
       }
+      #${PANEL_ID}.rbx-panel-floating .rbx-tm-card { box-shadow: 0 8px 30px rgba(0,0,0,.24); }
       #${PANEL_ID} * { box-sizing: border-box; font-family: inherit; }
 
+      #${PANEL_ID} .rbx-tm-card {
+        background: var(--rbx-card); border: 1px solid var(--rbx-border);
+        border-radius: 12px; padding: 20px 24px; margin: 0 0 16px;
+      }
       #${PANEL_ID} .rbx-tm-head { display: flex; align-items: center; gap: 10px; }
       #${PANEL_ID} .rbx-tm-head h2 {
         margin: 0; padding: 0; border: 0;
@@ -132,6 +137,7 @@
         font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
         padding: 4px 8px; border-radius: 6px;
       }
+      #${PANEL_ID} .rbx-tm-badge.rbx-tm-count { background: var(--rbx-subtle); color: var(--rbx-muted); }
       #${PANEL_ID} .rbx-tm-close {
         margin-left: auto; background: none; border: 0; cursor: pointer;
         color: var(--rbx-muted); font-size: 22px; line-height: 1; padding: 0 4px;
@@ -143,6 +149,7 @@
         padding: 16px 0; border-top: 1px solid var(--rbx-divider);
       }
       #${PANEL_ID} .rbx-tm-row.rbx-tm-block { display: block; }
+      #${PANEL_ID} .rbx-tm-row.rbx-tm-bare { border-top: 0; padding-top: 0; }
       #${PANEL_ID} .rbx-tm-rowhead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
       #${PANEL_ID} .rbx-tm-label { font-weight: 600; }
       #${PANEL_ID} .rbx-tm-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -167,6 +174,7 @@
         background: var(--rbx-subtle); color: var(--rbx-text);
       }
       #${PANEL_ID} .rbx-tm-btn:hover { filter: brightness(.96); }
+      #${PANEL_ID} .rbx-tm-btn:disabled { opacity: .5; cursor: default; }
       #${PANEL_ID} .rbx-tm-btn.rbx-tm-primary { background: var(--rbx-blue); color: #fff; }
       #${PANEL_ID} .rbx-tm-btn.rbx-tm-primary:hover { background: var(--rbx-blue-dark); filter: none; }
       #${PANEL_ID} .rbx-tm-chips .rbx-tm-btn { padding: 8px 14px; font-size: 13px; }
@@ -193,6 +201,48 @@
       }
       #${PANEL_ID} .rbx-tm-switch input:checked + i::after { transform: translateX(20px); }
 
+      /* Fiche d'identité */
+      #${PANEL_ID} .rbx-tm-ident { display: flex; align-items: center; gap: 16px; }
+      #${PANEL_ID} .rbx-tm-ident img {
+        width: 72px; height: 72px; border-radius: 50%; flex: none;
+        background: var(--rbx-subtle); object-fit: cover;
+      }
+      #${PANEL_ID} .rbx-tm-ident-name {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 18px; font-weight: 700;
+      }
+      #${PANEL_ID} .rbx-tm-verified { width: 18px; height: 18px; flex: none; }
+      #${PANEL_ID} .rbx-tm-ident-user { color: var(--rbx-muted); font-size: 14px; }
+      #${PANEL_ID} .rbx-tm-ident-stats {
+        display: flex; gap: 16px; margin-top: 6px;
+        color: var(--rbx-muted); font-size: 13px;
+      }
+      #${PANEL_ID} .rbx-tm-ident-stats b { color: var(--rbx-text); }
+      #${PANEL_ID} .rbx-tm-error { color: var(--rbx-red); font-size: 14px; }
+
+      /* Grille d'articles simulés */
+      #${PANEL_ID} .rbx-tm-grid {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 12px; margin-top: 12px;
+      }
+      #${PANEL_ID} .rbx-tm-item {
+        border: 1px solid var(--rbx-border); border-radius: 8px; overflow: hidden;
+        background: var(--rbx-card);
+      }
+      #${PANEL_ID} .rbx-tm-item img {
+        width: 100%; aspect-ratio: 1; object-fit: cover; display: block;
+        background: var(--rbx-subtle);
+      }
+      #${PANEL_ID} .rbx-tm-item .rbx-tm-item-body { padding: 8px 10px; }
+      #${PANEL_ID} .rbx-tm-item .rbx-tm-item-name {
+        font-size: 13px; font-weight: 600; line-height: 1.3;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      }
+      #${PANEL_ID} .rbx-tm-item .rbx-tm-item-price {
+        display: flex; align-items: center; gap: 4px;
+        font-size: 13px; font-weight: 700; margin-top: 4px;
+      }
+
       #${PANEL_ID} .rbx-tm-hist {
         list-style: none; margin: 8px 0 0; padding: 0;
         max-height: 180px; overflow: auto;
@@ -202,11 +252,25 @@
         padding: 10px 0; border-top: 1px solid var(--rbx-divider);
         font-size: 14px; color: var(--rbx-muted);
       }
-      #${PANEL_ID} .rbx-tm-hist li span:first-child {
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      }
       #${PANEL_ID} .rbx-tm-empty { color: var(--rbx-muted); font-size: 14px; margin: 12px 0 0; }
       #${PANEL_ID} .rbx-tm-note { color: var(--rbx-muted); font-size: 12px; margin: 16px 0 0; }
+
+      /* Cartes injectées dans la vraie grille d'inventaire */
+      .rbx-tm-inv-card {
+        border: 1px solid #e3e5e6; border-radius: 8px; overflow: hidden;
+        background: #fff; width: 150px; margin: 0 8px 16px 0; display: inline-block;
+        vertical-align: top; text-align: left;
+      }
+      body.dark-theme .rbx-tm-inv-card { background: #2f3133; border-color: #393b3d; color: #fff; }
+      .rbx-tm-inv-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #f2f4f5; }
+      .rbx-tm-inv-card .rbx-tm-inv-body { padding: 8px 10px; }
+      .rbx-tm-inv-card .rbx-tm-inv-name { font-size: 13px; font-weight: 600; line-height: 1.3; }
+      .rbx-tm-inv-card .rbx-tm-inv-price {
+        display: flex; align-items: center; gap: 4px;
+        font-size: 13px; font-weight: 700; margin-top: 4px;
+      }
+      /* La règle de taille du panneau ne porte pas jusqu'ici. */
+      .rbx-tm-inv-card .rbx-tm-icon { width: 14px; height: 14px; flex: none; }
     `;
     (document.head || document.documentElement).appendChild(s);
   }
@@ -222,31 +286,29 @@
 
   injectStyle();
 
+  // Roblox marque son thème sur <body> ; on s'y aligne au lieu de suivre l'OS,
+  // sinon le panneau s'affiche en sombre sur un site resté en clair.
+  function currentTheme() {
+    const cls = document.body ? document.body.className : '';
+    if (/\bdark-theme\b/.test(cls)) return 'dark';
+    if (/\blight-theme\b/.test(cls)) return 'light';
+    return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+
   // ---------- 2. FAUX SOLDE (DOM) ----------
-  // React re-rend le header en permanence : on réécrit à chaque mutation.
-  // Sélecteurs directs (anciennes et nouvelles versions du header).
   const BALANCE_SELECTORS = [
-    '#nav-robux-amount',
-    '#nav-robux-balance',
-    '#navbar-robux-amount',
-    '.text-robux-tab',
-    '.text-robux',
-    '[data-testid="navigation-robux-amount"]',
-    '[data-testid="nav-robux-amount"]'
+    '#nav-robux-amount', '#nav-robux-balance', '#navbar-robux-amount',
+    '.text-robux-tab', '.text-robux',
+    '[data-testid="navigation-robux-amount"]', '[data-testid="nav-robux-amount"]'
   ];
 
-  // Conteneurs « robux » : à l'intérieur, un nombre isolé est forcément le solde.
-  // Le nom de la classe qui porte la valeur change au fil des refontes, donc on
-  // vise le conteneur (stable) plutôt que la valeur.
   const ROBUX_CONTAINERS = [
     '#navbar-robux', '#navigation-robux', '#nav-robux',
     '[id*="robux" i]', '[class*="robux" i]', '[data-testid*="robux" i]'
   ].join(', ');
 
-  // On ne sort jamais du header : ailleurs, un nombre isolé serait un prix.
   const HEADER_ANCESTORS = 'header, nav, #header, .rbx-header, [data-testid*="header" i], [class*="navbar" i]';
-
-  const NUMERIC_RE = /^[\d.,\s\u00a0\u202f]+$/;
+  const NUMERIC_RE = /^[\d.,\s  ]+$/;
 
   function setText(el, txt) {
     if (el.dataset.rbxFake === txt) return;
@@ -256,12 +318,11 @@
     el.title = 'Solde simulé — mode test';
   }
 
-  // Remplace un élément-feuille dont le texte n'est qu'un nombre.
   function paintLeaf(el, txt) {
-    if (el.children.length) return;                    // conteneur, pas la valeur
-    if (el.closest('#' + PANEL_ID)) return;            // pas notre propre panneau
+    if (el.children.length) return;
+    if (el.closest('#' + PANEL_ID)) return;
     const t = (el.textContent || '').trim();
-    if (!t || !NUMERIC_RE.test(t)) return;             // « Robux », icône, etc.
+    if (!t || !NUMERIC_RE.test(t)) return;
     setText(el, txt);
   }
 
@@ -272,16 +333,178 @@
     for (const sel of BALANCE_SELECTORS) {
       document.querySelectorAll(sel).forEach(el => setText(el, txt));
     }
-
     document.querySelectorAll(ROBUX_CONTAINERS).forEach(box => {
       if (!box.closest(HEADER_ANCESTORS)) return;
-      paintLeaf(box, txt);                             // le conteneur est lui-même la valeur
+      paintLeaf(box, txt);
       box.querySelectorAll('*').forEach(el => paintLeaf(el, txt));
     });
   }
 
-  // ---------- 3. INTERCEPTION RÉSEAU ----------
-  // Roblox utilise axios (XHR) autant que fetch : les deux sont couverts.
+  // ---------- 3. COMPTE RÉEL ET IDENTITÉ EMPRUNTÉE ----------
+  // On garde le vrai identifiant numérique : le site s'en sert pour ses propres
+  // appels (inventaire, amis…). Seuls le nom, le pseudo et l'avatar changent.
+  async function ensureMe() {
+    if (state.me && state.me.id) return state.me;
+    if (!origFetch) return null;
+    try {
+      const r = await origFetch('https://users.roblox.com/v1/users/authenticated', { credentials: 'include' });
+      if (!r.ok) return null;
+      const d = await r.json();
+      state.me = { id: d.id, name: d.name, displayName: d.displayName };
+      save();
+      return state.me;
+    } catch {
+      return null;
+    }
+  }
+
+  // Recherche le profil public réel d'un pseudo, tel que Roblox l'expose.
+  async function lookupUser(username) {
+    if (!origFetch) throw new Error('réseau indisponible');
+
+    const r = await origFetch('https://users.roblox.com/v1/usernames/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
+    });
+    if (!r.ok) throw new Error('recherche impossible (HTTP ' + r.status + ')');
+    const found = (await r.json()).data || [];
+    if (!found.length) throw new Error('aucun compte nommé « ' + username + ' »');
+
+    const id = found[0].id;
+    const [detail, headshot, avatar, friends, followers] = await Promise.all([
+      getJson('https://users.roblox.com/v1/users/' + id),
+      getJson('https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=' + id + '&size=150x150&format=Png&isCircular=false'),
+      getJson('https://thumbnails.roblox.com/v1/users/avatar?userIds=' + id + '&size=420x420&format=Png&isCircular=false'),
+      getJson('https://friends.roblox.com/v1/users/' + id + '/friends/count'),
+      getJson('https://friends.roblox.com/v1/users/' + id + '/followers/count')
+    ]);
+
+    const pick = (t) => (t && t.data && t.data[0] && t.data[0].imageUrl) || '';
+
+    return {
+      id,
+      name: (detail && detail.name) || found[0].name,
+      displayName: (detail && detail.displayName) || found[0].displayName || found[0].name,
+      description: (detail && detail.description) || '',
+      created: (detail && detail.created) || '',
+      hasVerifiedBadge: !!((detail && detail.hasVerifiedBadge) || found[0].hasVerifiedBadge),
+      headshotUrl: pick(headshot),
+      avatarUrl: pick(avatar),
+      friendCount: (friends && friends.count) || 0,
+      followerCount: (followers && followers.count) || 0
+    };
+  }
+
+  async function getJson(url) {
+    try {
+      const r = await origFetch(url, { credentials: 'omit' });
+      return r.ok ? await r.json() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const spoofOn = () => state.enabled && state.spoof && state.spoof.active;
+
+  // Remplacement dans le texte de la page. Idempotent : une fois le vrai nom
+  // remplacé, il n'y a plus rien à trouver, donc aucune boucle avec l'observateur.
+  const IDENT_SKIP = /^(SCRIPT|STYLE|TEXTAREA|INPUT|NOSCRIPT)$/;
+
+  function paintIdentity() {
+    if (!spoofOn() || !state.me || !document.body) return;
+    const sp = state.spoof;
+
+    const pairs = [];
+    if (state.me.displayName && state.me.displayName !== sp.displayName) {
+      pairs.push([state.me.displayName, sp.displayName]);
+    }
+    if (state.me.name && state.me.name !== sp.name) {
+      pairs.push([state.me.name, sp.name]);
+    }
+    if (!pairs.length) return;
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const todo = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      const parent = node.parentElement;
+      if (!parent || IDENT_SKIP.test(parent.tagName)) continue;
+      if (parent.closest('#' + PANEL_ID)) continue;
+      const txt = node.nodeValue;
+      if (!txt || !pairs.some(([real]) => txt.includes(real))) continue;
+      todo.push(node);
+    }
+    for (const n of todo) {
+      let v = n.nodeValue;
+      for (const [real, faux] of pairs) v = v.split(real).join(faux);
+      n.nodeValue = v;
+    }
+
+    swapAvatars(sp);
+  }
+
+  // Les images rendues côté serveur ne passent pas par l'API vignettes :
+  // on les remplace dans les conteneurs d'avatar connus.
+  const AVATAR_SELECTORS = [
+    '.avatar-card-image img', '.profile-avatar img', '.avatar .avatar-card-image img',
+    '[class*="avatar" i] img', '[data-testid*="avatar" i] img'
+  ].join(', ');
+
+  function swapAvatars(sp) {
+    const url = sp.headshotUrl || sp.avatarUrl;
+    if (!url) return;
+    document.querySelectorAll(AVATAR_SELECTORS).forEach(img => {
+      if (img.closest('#' + PANEL_ID)) return;
+      if (img.dataset.rbxAvatar === url) return;
+      // On ne touche qu'aux vignettes Roblox, jamais aux visuels de jeux.
+      if (!/rbxcdn\.com/.test(img.src || '')) return;
+      img.dataset.rbxAvatar = url;
+      img.src = url;
+      img.srcset = '';
+    });
+  }
+
+  // ---------- 4. CACHE DES ARTICLES ----------
+  // Rempli au fil de la navigation : c'est ce qui permet, au moment de l'achat,
+  // de connaître le nom, le prix et la vignette réels de l'article.
+  const itemCache = new Map();
+  const CACHE_MAX = 400;
+
+  function cachePut(key, patch) {
+    if (!key) return;
+    const cur = itemCache.get(key) || {};
+    itemCache.set(key, Object.assign(cur, patch));
+    if (itemCache.size > CACHE_MAX) itemCache.delete(itemCache.keys().next().value);
+  }
+
+  function captureCatalogDetails(data) {
+    const rows = (data && data.data) || [];
+    for (const it of rows) {
+      const meta = {
+        assetId: it.id,
+        itemType: it.itemType,
+        assetType: it.assetType,
+        productId: it.productId,
+        collectibleItemId: it.collectibleItemId,
+        name: it.name,
+        price: it.price != null ? it.price : it.lowestPrice,
+        creatorName: it.creatorName
+      };
+      cachePut('a' + it.id, meta);
+      if (it.productId != null) cachePut('p' + it.productId, meta);
+      if (it.collectibleItemId) cachePut('c' + it.collectibleItemId, meta);
+    }
+  }
+
+  function captureThumbnails(data) {
+    const rows = (data && data.data) || [];
+    for (const t of rows) {
+      if (t.targetId && t.imageUrl) cachePut('a' + t.targetId, { thumb: t.imageUrl });
+    }
+  }
+
+  // ---------- 5. INTERCEPTION RÉSEAU ----------
   const PURCHASE_PATTERNS = [
     /\/v1\/purchases\/products\//,
     /marketplace-sales\/v\d+\/item/,
@@ -290,8 +513,6 @@
     /\/v1\/gamepass\/\d+\/purchase/
   ];
 
-  // Endpoints qui renvoient le vrai solde : on réécrit la réponse pour que
-  // React affiche lui-même le faux solde (c'est ça qui corrige le « 0 »).
   const CURRENCY_PATTERNS = [
     /economy\.roblox\.com\/v1\/user\/currency/,
     /economy\.roblox\.com\/v1\/users\/\d+\/currency/,
@@ -302,22 +523,201 @@
   const isPurchase = (url) => state.enabled && PURCHASE_PATTERNS.some(re => re.test(url));
   const isCurrency = (url) => state.enabled && CURRENCY_PATTERNS.some(re => re.test(url));
 
-  function extractPrice(body) {
-    try {
-      const b = typeof body === 'string' ? JSON.parse(body) : (body || {});
-      return Number(b.expectedPrice || b.price || 0) || 0;
-    } catch {
-      return 0;
+  // Toute réponse JSON qui nous intéresse passe ici, quel que soit le transport.
+  const INTERESTING = /(economy|users|thumbnails|inventory|catalog|friends|apis|accountsettings)\.roblox\.com/;
+
+  function transform(url, text) {
+    if (!state.enabled || typeof text !== 'string' || !text) return text;
+    // Roblox émet beaucoup de requêtes : on écarte tout de suite ce qui ne nous
+    // concerne pas, plutôt que de tenter un JSON.parse à chaque réponse.
+    if (url.includes('roblox.com') && !INTERESTING.test(url)) return text;
+    const c = text.charCodeAt(0);
+    if (c !== 123 && c !== 91) return text;   // ni « { » ni « [ » : pas du JSON
+
+    let data;
+    try { data = JSON.parse(text); } catch { return text; }
+    if (data === null || typeof data !== 'object') {
+      // is-owned renvoie un booléen nu.
+      if (/inventory\.roblox\.com\/v1\/users\/\d+\/items\/\w+\/(\d+)\/is-owned/.test(url)) {
+        const id = url.match(/items\/\w+\/(\d+)\/is-owned/)[1];
+        if (ownsAsset(id)) return 'true';
+      }
+      return text;
     }
+
+    let touched = false;
+
+    // -- caches passifs --
+    if (/catalog\.roblox\.com\/v1\/catalog\/items\/details/.test(url)) captureCatalogDetails(data);
+    if (/thumbnails\.roblox\.com\/v1\/assets\b/.test(url)) captureThumbnails(data);
+
+    // -- solde --
+    if (isCurrency(url) && 'robux' in data) {
+      data.robux = state.balance;
+      touched = true;
+    }
+
+    // -- identité --
+    if (spoofOn()) touched = spoofResponse(url, data) || touched;
+
+    // -- inventaire --
+    if (injectInventory(url, data)) touched = true;
+
+    return touched ? JSON.stringify(data) : text;
   }
 
-  function applyPurchase(url, price) {
-    state.balance = Math.max(0, state.balance - price);
-    state.owned.push({ url, price, at: new Date().toISOString() });
+  function spoofResponse(url, data) {
+    const sp = state.spoof;
+    const me = state.me;
+    let touched = false;
+
+    // Compte connecté et fiche utilisateur : on ne change que l'apparence.
+    if (/users\.roblox\.com\/v1\/users\/authenticated/.test(url) ||
+        (me && new RegExp('users\\.roblox\\.com/v1/users/' + me.id + '\\b').test(url))) {
+      if (!me && data.id) {                      // première réponse : on note le vrai compte
+        state.me = { id: data.id, name: data.name, displayName: data.displayName };
+        save();
+      }
+      data.name = sp.name;
+      data.displayName = sp.displayName;
+      if ('hasVerifiedBadge' in data || sp.hasVerifiedBadge) data.hasVerifiedBadge = sp.hasVerifiedBadge;
+      if ('description' in data) data.description = sp.description || data.description;
+      touched = true;
+    }
+
+    // Vignettes d'avatar : on substitue l'image du profil emprunté.
+    if (me && /thumbnails\.roblox\.com\/v1\/users\/(avatar|avatar-headshot|avatar-bust)/.test(url)) {
+      const img = /headshot|bust/.test(url) ? (sp.headshotUrl || sp.avatarUrl) : (sp.avatarUrl || sp.headshotUrl);
+      for (const row of (data.data || [])) {
+        if (String(row.targetId) === String(me.id) && img) {
+          row.imageUrl = img;
+          row.state = 'Completed';
+          touched = true;
+        }
+      }
+    }
+
+    // Listes de noms (barre de navigation, recherche d'amis…).
+    if (me && Array.isArray(data.data)) {
+      for (const row of data.data) {
+        if (row && String(row.id) === String(me.id)) {
+          row.name = sp.name;
+          row.displayName = sp.displayName;
+          row.hasVerifiedBadge = sp.hasVerifiedBadge;
+          touched = true;
+        }
+      }
+    }
+
+    return touched;
+  }
+
+  const ownsAsset = (assetId) =>
+    state.owned.some(it => String(it.assetId) === String(assetId));
+
+  function injectInventory(url, data) {
+    const m = url.match(/inventory\.roblox\.com\/v\d\/users\/(\d+)\/inventory(?:\/(\d+))?/);
+    if (!m || !Array.isArray(data.data)) return false;
+    if (state.me && String(state.me.id) !== m[1]) return false;   // pas mon inventaire
+
+    const wanted = m[2] ? Number(m[2]) : null;
+    const mine = state.owned.filter(it =>
+      it.assetId && (wanted == null || Number(it.assetType) === wanted));
+    if (!mine.length) return false;
+
+    // On recopie la forme d'une entrée réelle : plus sûr que de la deviner.
+    const tmpl = data.data[0] || null;
+    const already = new Set(data.data.map(e => String(e.assetId)));
+
+    const built = mine
+      .filter(it => !already.has(String(it.assetId)))
+      .map(it => {
+        const e = tmpl ? JSON.parse(JSON.stringify(tmpl)) : {};
+        e.assetId = Number(it.assetId) || it.assetId;
+        e.name = it.name;
+        if (e.assetType && typeof e.assetType === 'object') e.assetType.id = it.assetType;
+        else e.assetType = it.assetType;
+        e.created = e.updated = it.at;
+        return e;
+      });
+
+    if (!built.length) return false;
+    data.data = built.concat(data.data);
+    return true;
+  }
+
+  // -- achats --
+  function extractBody(body) {
+    try { return typeof body === 'string' ? JSON.parse(body) : (body || {}); }
+    catch { return {}; }
+  }
+
+  function resolveItem(url, body, fallbackPrice) {
+    const b = extractBody(body);
+    const keys = [];
+
+    const p = url.match(/\/v1\/purchases\/products\/(\d+)/);
+    if (p) keys.push('p' + p[1]);
+    const c = url.match(/marketplace-sales\/v\d+\/item\/([\w-]+)/);
+    if (c) keys.push('c' + c[1]);
+    if (b.collectibleItemId) keys.push('c' + b.collectibleItemId);
+    if (b.assetId) keys.push('a' + b.assetId);
+
+    // Repli : l'article de la page courante.
+    const onPage = location.pathname.match(/\/(?:catalog|bundles|library)\/(\d+)/);
+    if (onPage) keys.push('a' + onPage[1]);
+
+    let meta = null;
+    for (const k of keys) {
+      const hit = itemCache.get(k);
+      if (hit && hit.assetId) { meta = hit; break; }
+    }
+    // Les vignettes arrivent par un appel distinct, rangé sous la clé de l'article.
+    if (meta && !meta.thumb) {
+      const parAsset = itemCache.get('a' + meta.assetId);
+      if (parAsset && parAsset.thumb) meta = Object.assign({}, meta, { thumb: parAsset.thumb });
+    }
+
+    const price = Number(
+      b.expectedPrice != null ? b.expectedPrice
+      : b.price != null ? b.price
+      : (meta && meta.price) != null ? meta.price
+      : fallbackPrice
+    ) || 0;
+
+    return {
+      assetId: meta ? meta.assetId : (onPage ? Number(onPage[1]) : null),
+      assetType: meta ? meta.assetType : null,
+      itemType: meta ? meta.itemType : 'Asset',
+      name: (meta && meta.name) || pageItemName() || 'Article simulé',
+      creatorName: (meta && meta.creatorName) || '',
+      thumb: (meta && meta.thumb) || '',
+      price,
+      url,
+      at: new Date().toISOString()
+    };
+  }
+
+  function pageItemName() {
+    const h = document.querySelector('#item-container h1, .item-name-container h1, h1');
+    return h ? h.textContent.trim() : '';
+  }
+
+  function applyPurchase(url, body, fallbackPrice) {
+    const item = resolveItem(url, body, fallbackPrice);
+
+    state.balance = Math.max(0, state.balance - item.price);
+    if (!item.assetId || !ownsAsset(item.assetId)) state.owned.push(item);
     save();
     paintBalance();
     renderPanel();
-    console.log('[TEST MODE] achat simulé', { url, price, solde: state.balance });
+
+    console.log('[TEST MODE] achat simulé', item);
+
+    if (state.reloadAfterPurchase) {
+      // On laisse la confirmation de Roblox s'afficher avant de recharger.
+      setTimeout(() => location.reload(), RELOAD_DELAY);
+    }
   }
 
   const purchaseResponseBody = () => JSON.stringify({
@@ -327,24 +727,12 @@
     testMode: true          // marqueur laissé volontairement dans la réponse
   });
 
-  function rewriteCurrency(text) {
-    try {
-      const data = JSON.parse(text);
-      if (data && typeof data === 'object') {
-        data.robux = state.balance;
-        return JSON.stringify(data);
-      }
-    } catch { /* réponse non-JSON */ }
-    return text;
-  }
-
   // --- fetch ---
-  const origFetch = window.fetch;
   window.fetch = async function (input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
 
     if (isPurchase(url)) {
-      applyPurchase(url, extractPrice(init && init.body));
+      applyPurchase(url, init && init.body, 0);
       return new Response(purchaseResponseBody(), {
         status: 200, headers: { 'Content-Type': 'application/json' }
       });
@@ -352,14 +740,15 @@
 
     const res = await origFetch.apply(this, arguments);
 
-    if (isCurrency(url)) {
-      try {
-        const text = await res.clone().text();
-        return new Response(rewriteCurrency(text), {
+    try {
+      const text = await res.clone().text();
+      const patched = transform(url, text);
+      if (patched !== text) {
+        return new Response(patched, {
           status: res.status, statusText: res.statusText, headers: res.headers
         });
-      } catch { /* on laisse passer la vraie réponse */ }
-    }
+      }
+    } catch { /* corps binaire ou déjà consommé : on laisse passer */ }
 
     return res;
   };
@@ -374,19 +763,20 @@
 
     // Écouteur posé dès open() : il s'exécute donc avant ceux d'axios,
     // qui n'assigne ses handlers qu'entre open() et send().
-    if (isCurrency(this.__rbxUrl)) {
-      this.addEventListener('readystatechange', () => {
-        if (this.readyState !== 4 || this.status !== 200) return;
-        try {
-          const patched = rewriteCurrency(this.responseText);
-          Object.defineProperty(this, 'responseText', { configurable: true, get: () => patched });
-          Object.defineProperty(this, 'response', {
-            configurable: true,
-            get: () => (this.responseType === 'json' ? JSON.parse(patched) : patched)
-          });
-        } catch { /* responseType binaire : on ne touche à rien */ }
-      });
-    }
+    this.addEventListener('readystatechange', () => {
+      if (this.readyState !== 4 || this.status !== 200) return;
+      if (this.responseType && this.responseType !== 'text' && this.responseType !== 'json') return;
+      try {
+        const raw = this.responseText;
+        const patched = transform(this.__rbxUrl, raw);
+        if (patched === raw) return;
+        Object.defineProperty(this, 'responseText', { configurable: true, get: () => patched });
+        Object.defineProperty(this, 'response', {
+          configurable: true,
+          get: () => (this.responseType === 'json' ? JSON.parse(patched) : patched)
+        });
+      } catch { /* réponse illisible : on ne touche à rien */ }
+    });
 
     return origOpen.apply(this, arguments);
   };
@@ -396,7 +786,7 @@
 
     if (isPurchase(url)) {
       // On ne laisse PAS partir la requête : on fabrique la réponse.
-      applyPurchase(url, extractPrice(body));
+      applyPurchase(url, body, 0);
       fakeXhrResponse(this, purchaseResponseBody());
       return;
     }
@@ -417,7 +807,6 @@
       String(h).toLowerCase() === 'content-type' ? 'application/json' : null;
 
     setTimeout(() => {
-      // On couvre les deux styles : handlers de propriété et addEventListener.
       for (const type of ['readystatechange', 'load', 'loadend']) {
         const handler = xhr['on' + type];
         if (typeof handler === 'function') handler.call(xhr, new Event(type));
@@ -426,79 +815,163 @@
     }, 0);
   }
 
-  // ---------- 4. PANNEAU DANS LES PARAMÈTRES ----------
+  // ---------- 6. INVENTAIRE (DOM) ----------
+  // L'injection dans la réponse d'API suffit quand la page consomme cette API.
+  // Ces cartes sont le filet de sécurité : elles s'ajoutent à la vraie grille.
+  const INVENTORY_RE = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:users\/\d+\/inventory|my\/inventory)/i;
+  const isInventoryPage = () => INVENTORY_RE.test(location.pathname);
+
+  const GRID_SELECTORS = [
+    '.item-cards-stackable', '.item-cards', '.hlist.item-cards',
+    '[data-testid="inventory-item-list"]', '.inventory-container .item-cards'
+  ].join(', ');
+
+  function paintInventory() {
+    if (!state.enabled || !isInventoryPage() || !state.owned.length) return;
+    const grid = document.querySelector(GRID_SELECTORS);
+    if (!grid) return;
+
+    for (const it of state.owned) {
+      const key = String(it.assetId || it.at);
+      if (grid.querySelector('[data-rbx-item="' + CSS.escape(key) + '"]')) continue;
+
+      const card = document.createElement('div');
+      card.className = 'rbx-tm-inv-card';
+      card.dataset.rbxItem = key;
+      card.title = 'Article simulé — mode test';
+      card.innerHTML =
+        (it.thumb ? '<img src="' + esc(it.thumb) + '" alt="" />' : '<img alt="" />') +
+        '<div class="rbx-tm-inv-body">' +
+          '<div class="rbx-tm-inv-name">' + esc(it.name) + '</div>' +
+          '<div class="rbx-tm-inv-price">' + ROBUX_ICON + ' ' + fmt(it.price) + '</div>' +
+        '</div>';
+      grid.insertBefore(card, grid.firstChild);
+    }
+  }
+
+  // ---------- 7. PANNEAU ----------
   // Roblox préfixe ses URL par la locale : /fr/my/account, /en-us/settings…
   const SETTINGS_RE = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:my\/account|settings)/i;
   const isSettingsPage = () =>
     SETTINGS_RE.test(location.pathname) || /#!?\/(settings|info|account)/i.test(location.hash);
 
-  // Emplacements où insérer le panneau, du plus précis au plus générique.
+  const wantsPanel = () => isSettingsPage() || isInventoryPage();
+
   const MOUNTS = [
     '#settings-container', '.settings-container',
     '#account-settings-container', '.account-settings',
     '#my-settings-container', '.settings-content',
+    '.inventory-container', '#inventory-container',
     '#content .container-main', '#container-main', '#content'
   ];
 
   let panelEl = null;
-  let panelForced = false;   // ouvert manuellement hors page paramètres
+  let panelForced = false;   // ouvert manuellement hors des pages concernées
   let panelClosed = false;   // fermé à la croix : à respecter jusqu'à la prochaine navigation
+  let lookupState = { busy: false, error: '', found: null };
+
+  function syncTheme() {
+    if (!panelEl || !panelEl.isConnected) return;
+    const t = currentTheme();
+    // On n'écrit que si ça change : sinon le MutationObserver se rappellerait lui-même.
+    if (panelEl.dataset.rbxTheme !== t) panelEl.dataset.rbxTheme = t;
+  }
 
   function buildPanel() {
     const el = document.createElement('div');
     el.id = PANEL_ID;
     el.innerHTML = `
-      <div class="rbx-tm-head">
-        <h2>Robux</h2>
-        <span class="rbx-tm-badge">Mode test</span>
-        <button class="rbx-tm-close" type="button" title="Fermer">&times;</button>
-      </div>
-      <p class="rbx-tm-sub">Solde simulé, visible uniquement dans ce navigateur.</p>
+      <div class="rbx-tm-card">
+        <div class="rbx-tm-head">
+          <h2>Robux</h2>
+          <span class="rbx-tm-badge">Mode test</span>
+          <button class="rbx-tm-close" type="button" title="Fermer">&times;</button>
+        </div>
+        <p class="rbx-tm-sub">Solde simulé, visible uniquement dans ce navigateur.</p>
 
-      <div class="rbx-tm-row">
-        <span class="rbx-tm-label">Solde actuel</span>
-        <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="current">0</span></span>
-      </div>
-
-      <div class="rbx-tm-row">
-        <span class="rbx-tm-label">Modifier</span>
-        <span class="rbx-tm-grow">
-          <input class="rbx-tm-input" id="rbx-p-input" type="number" min="0" step="1" inputmode="numeric" />
-          <button class="rbx-tm-btn rbx-tm-primary" data-act="apply" type="button">Appliquer</button>
-        </span>
-      </div>
-
-      <div class="rbx-tm-row">
-        <span class="rbx-tm-label">Ajouter</span>
-        <span class="rbx-tm-right rbx-tm-chips">
-          <button class="rbx-tm-btn" data-add="1000" type="button">+1 000</button>
-          <button class="rbx-tm-btn" data-add="10000" type="button">+10 000</button>
-          <button class="rbx-tm-btn" data-add="100000" type="button">+100 000</button>
-          <button class="rbx-tm-btn" data-add="1000000" type="button">+1 000 000</button>
-          <button class="rbx-tm-btn" data-act="zero" type="button">Mettre à 0</button>
-        </span>
-      </div>
-
-      <div class="rbx-tm-row">
-        <span class="rbx-tm-label">Mode test actif</span>
-        <span class="rbx-tm-right">
-          <label class="rbx-tm-switch"><input type="checkbox" data-act="enabled" /><i></i></label>
-        </span>
-      </div>
-
-      <div class="rbx-tm-row rbx-tm-block">
-        <div class="rbx-tm-rowhead">
-          <span class="rbx-tm-label">Achats simulés (<span data-role="count">0</span>)</span>
-          <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-act="clear-hist" type="button">Vider</button>
-            <button class="rbx-tm-btn" data-act="reset" type="button">Réinitialiser</button>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Solde actuel</span>
+          <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="current">0</span></span>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Modifier</span>
+          <span class="rbx-tm-grow">
+            <input class="rbx-tm-input" id="rbx-p-input" type="number" min="0" step="1" inputmode="numeric" />
+            <button class="rbx-tm-btn rbx-tm-primary" data-act="apply" type="button">Appliquer</button>
           </span>
         </div>
-        <ul class="rbx-tm-hist" data-role="hist"></ul>
-        <p class="rbx-tm-empty" data-role="empty">Aucun achat simulé pour l'instant.</p>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Ajouter</span>
+          <span class="rbx-tm-right rbx-tm-chips">
+            <button class="rbx-tm-btn" data-add="1000" type="button">+1 000</button>
+            <button class="rbx-tm-btn" data-add="10000" type="button">+10 000</button>
+            <button class="rbx-tm-btn" data-add="100000" type="button">+100 000</button>
+            <button class="rbx-tm-btn" data-add="1000000" type="button">+1 000 000</button>
+            <button class="rbx-tm-btn" data-act="zero" type="button">Mettre à 0</button>
+          </span>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Mode test actif</span>
+          <span class="rbx-tm-right">
+            <label class="rbx-tm-switch"><input type="checkbox" data-act="enabled" /><i></i></label>
+          </span>
+        </div>
       </div>
 
-      <p class="rbx-tm-note">Local uniquement : rien n'est envoyé à Roblox, aucun Robux réel n'est débité ni crédité.</p>
+      <div class="rbx-tm-card">
+        <div class="rbx-tm-head">
+          <h2>Identité</h2>
+          <span class="rbx-tm-badge">Mode test</span>
+        </div>
+        <p class="rbx-tm-sub">Emprunte l'apparence d'un profil public réel : nom, pseudo, avatar et certification.</p>
+
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Pseudo à chercher</span>
+          <span class="rbx-tm-grow">
+            <input class="rbx-tm-input" id="rbx-p-user" type="text" autocapitalize="off"
+                   autocorrect="off" spellcheck="false" placeholder="ex. Azen" />
+            <button class="rbx-tm-btn rbx-tm-primary" data-act="lookup" type="button">Rechercher</button>
+          </span>
+        </div>
+        <div class="rbx-tm-row rbx-tm-block" data-role="ident"></div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Utiliser cette identité</span>
+          <span class="rbx-tm-right">
+            <label class="rbx-tm-switch"><input type="checkbox" data-act="spoof" /><i></i></label>
+          </span>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Mon vrai compte</span>
+          <span class="rbx-tm-right" data-role="real">—</span>
+        </div>
+      </div>
+
+      <div class="rbx-tm-card">
+        <div class="rbx-tm-head">
+          <h2>Inventaire simulé</h2>
+          <span class="rbx-tm-badge rbx-tm-count" data-role="count">0</span>
+        </div>
+        <p class="rbx-tm-sub">Les articles achetés en mode test, conservés et ajoutés à ton inventaire.</p>
+
+        <div class="rbx-tm-row rbx-tm-block rbx-tm-bare">
+          <div class="rbx-tm-grid" data-role="inv"></div>
+          <p class="rbx-tm-empty" data-role="inv-empty">Aucun article pour l'instant.</p>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Recharger la page après un achat</span>
+          <span class="rbx-tm-right">
+            <label class="rbx-tm-switch"><input type="checkbox" data-act="reload" /><i></i></label>
+          </span>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Historique</span>
+          <span class="rbx-tm-right rbx-tm-chips">
+            <button class="rbx-tm-btn" data-act="clear-inv" type="button">Vider l'inventaire</button>
+            <button class="rbx-tm-btn" data-act="reset" type="button">Tout réinitialiser</button>
+          </span>
+        </div>
+        <p class="rbx-tm-note">Local uniquement : rien n'est envoyé à Roblox, aucun Robux réel n'est débité ni crédité, aucun article n'est réellement acquis.</p>
+      </div>
     `;
 
     el.addEventListener('click', (e) => {
@@ -511,6 +984,8 @@
         el.remove();
         return;
       }
+      if (btn.dataset.act === 'lookup') { doLookup(); return; }
+
       if (btn.dataset.add) {
         state.balance = Math.max(0, state.balance + Number(btn.dataset.add));
       } else if (btn.dataset.act === 'apply') {
@@ -518,10 +993,11 @@
         state.balance = Number.isFinite(v) ? Math.max(0, Math.floor(v)) : state.balance;
       } else if (btn.dataset.act === 'zero') {
         state.balance = 0;
-      } else if (btn.dataset.act === 'clear-hist') {
+      } else if (btn.dataset.act === 'clear-inv') {
         state.owned = [];
       } else if (btn.dataset.act === 'reset') {
-        Object.assign(state, DEFAULTS, { owned: [] });
+        Object.assign(state, DEFAULTS, { owned: [], me: state.me });
+        lookupState = { busy: false, error: '', found: null };
       } else {
         return;
       }
@@ -532,56 +1008,124 @@
     });
 
     el.addEventListener('change', (e) => {
-      if (e.target.dataset.act !== 'enabled') return;
-      state.enabled = e.target.checked;
-      save();
-      if (state.enabled) paintBalance();
-      else location.reload();   // revenir aux vraies valeurs demande un rechargement
+      const act = e.target.dataset.act;
+      if (act === 'enabled') {
+        state.enabled = e.target.checked;
+        save();
+        if (state.enabled) paintBalance();
+        else location.reload();   // revenir aux vraies valeurs demande un rechargement
+      } else if (act === 'reload') {
+        state.reloadAfterPurchase = e.target.checked;
+        save();
+      } else if (act === 'spoof') {
+        const on = e.target.checked;
+        if (on && !lookupState.found && !state.spoof) {
+          e.target.checked = false;
+          lookupState.error = 'Cherche d\'abord un pseudo.';
+          renderPanel();
+          return;
+        }
+        state.spoof = Object.assign({}, state.spoof || lookupState.found, { active: on });
+        if (on && lookupState.found) state.spoof = Object.assign({}, lookupState.found, { active: true });
+        save();
+        location.reload();   // le site a déjà rendu l'ancien profil
+      }
     });
 
     el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.id === 'rbx-p-input') {
+      if (e.key !== 'Enter') return;
+      if (e.target.id === 'rbx-p-input') {
         e.preventDefault();
         el.querySelector('[data-act="apply"]').click();
+      } else if (e.target.id === 'rbx-p-user') {
+        e.preventDefault();
+        doLookup();
       }
     });
 
     return el;
   }
 
+  async function doLookup() {
+    if (!panelEl || lookupState.busy) return;
+    const input = panelEl.querySelector('#rbx-p-user');
+    const username = (input.value || '').trim();
+    if (!username) return;
+
+    lookupState = { busy: true, error: '', found: null };
+    renderPanel();
+
+    try {
+      lookupState.found = await lookupUser(username);
+      lookupState.error = '';
+    } catch (err) {
+      lookupState.found = null;
+      lookupState.error = err.message || 'recherche impossible';
+    }
+    lookupState.busy = false;
+    renderPanel();
+  }
+
+  function identHtml() {
+    if (lookupState.busy) return '<p class="rbx-tm-empty">Recherche en cours…</p>';
+    if (lookupState.error) return '<p class="rbx-tm-error">' + esc(lookupState.error) + '</p>';
+
+    const u = lookupState.found || (state.spoof && state.spoof.active ? state.spoof : null);
+    if (!u) return '<p class="rbx-tm-empty">Aucun profil chargé.</p>';
+
+    return '<div class="rbx-tm-ident">' +
+      '<img src="' + esc(u.headshotUrl || u.avatarUrl) + '" alt="" />' +
+      '<div>' +
+        '<div class="rbx-tm-ident-name">' + esc(u.displayName) +
+          (u.hasVerifiedBadge ? VERIFIED_ICON : '') + '</div>' +
+        '<div class="rbx-tm-ident-user">@' + esc(u.name) + ' · #' + esc(u.id) + '</div>' +
+        '<div class="rbx-tm-ident-stats">' +
+          '<span><b>' + fmt(u.followerCount) + '</b> abonnés</span>' +
+          '<span><b>' + fmt(u.friendCount) + '</b> amis</span>' +
+        '</div>' +
+      '</div></div>';
+  }
+
+  function invHtml() {
+    return state.owned.slice().reverse().map(it =>
+      '<div class="rbx-tm-item">' +
+        (it.thumb ? '<img src="' + esc(it.thumb) + '" alt="" />' : '<img alt="" />') +
+        '<div class="rbx-tm-item-body">' +
+          '<div class="rbx-tm-item-name">' + esc(it.name || 'Article simulé') + '</div>' +
+          '<div class="rbx-tm-item-price">' + ROBUX_ICON + fmt(it.price) + '</div>' +
+        '</div>' +
+      '</div>'
+    ).join('');
+  }
+
   function renderPanel() {
     if (!panelEl || !panelEl.isConnected) return;
     syncTheme();
 
-    const input = panelEl.querySelector('#rbx-p-input');
+    const q = (sel) => panelEl.querySelector(sel);
+
+    const input = q('#rbx-p-input');
     if (document.activeElement !== input) input.value = state.balance;
 
-    panelEl.querySelector('[data-role="current"]').textContent = fmt(state.balance);
-    panelEl.querySelector('[data-act="enabled"]').checked = !!state.enabled;
-    panelEl.querySelector('[data-role="count"]').textContent = state.owned.length;
+    q('[data-role="current"]').textContent = fmt(state.balance);
+    q('[data-act="enabled"]').checked = !!state.enabled;
+    q('[data-act="reload"]').checked = !!state.reloadAfterPurchase;
+    q('[data-act="spoof"]').checked = spoofOn();
 
-    const hist = panelEl.querySelector('[data-role="hist"]');
-    const empty = panelEl.querySelector('[data-role="empty"]');
-    hist.textContent = '';
-    const recent = state.owned.slice(-20).reverse();
-    empty.style.display = recent.length ? 'none' : '';
-    for (const item of recent) {
-      const li = document.createElement('li');
-      const when = document.createElement('span');
-      const price = document.createElement('span');
-      let date = item.at;
-      try { date = new Date(item.at).toLocaleString('fr-FR'); } catch { /* date brute */ }
-      when.textContent = date;
-      price.textContent = '−' + fmt(item.price) + ' R$';
-      li.append(when, price);
-      hist.appendChild(li);
-    }
+    q('[data-role="ident"]').innerHTML = identHtml();
+    q('[data-role="real"]').textContent = state.me
+      ? state.me.displayName + ' (@' + state.me.name + ')'
+      : 'non identifié';
+
+    q('[data-role="count"]').textContent = state.owned.length;
+    q('[data-role="inv"]').innerHTML = invHtml();
+    q('[data-role="inv-empty"]').style.display = state.owned.length ? 'none' : '';
   }
 
   function mountPanel() {
     if (!document.body) return;
 
-    const voulu = panelForced || (isSettingsPage() && !panelClosed);
+    const voulu = panelForced || (wantsPanel() && !panelClosed);
     if (!voulu) {
       if (panelEl && panelEl.isConnected) panelEl.remove();
       return;
@@ -602,7 +1146,7 @@
       panelEl.classList.remove('rbx-panel-floating');
       host.insertBefore(panelEl, host.firstChild);
     } else {
-      // Page paramètres pas encore rendue (ou ouverture manuelle) : panneau flottant.
+      // Page pas encore rendue (ou ouverture manuelle) : panneau flottant.
       panelEl.classList.add('rbx-panel-floating');
       document.body.appendChild(panelEl);
     }
@@ -627,10 +1171,12 @@
     mountPanel();
   }
 
-  // ---------- 5. BOUCLE D'ENTRETIEN ----------
+  // ---------- 8. BOUCLE D'ENTRETIEN ----------
   const tick = () => {
     injectBanner();
     paintBalance();
+    paintIdentity();
+    paintInventory();
     mountPanel();
     syncTheme();
   };
@@ -638,6 +1184,7 @@
   const obs = new MutationObserver(tick);
 
   function start() {
+    ensureMe().then(() => { renderPanel(); paintIdentity(); });
     tick();
     obs.observe(document.body, { childList: true, subtree: true });
     // Filet de sécurité : certains re-rendus React ne déclenchent pas d'observation utile.
@@ -647,11 +1194,22 @@
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start);
 
-  // Console : rbxTest.panel() ouvre le panneau depuis n'importe quelle page
+  // ---------- 9. API CONSOLE ----------
   window.rbxTest = {
     state,
     reset() { localStorage.removeItem(STORAGE_KEY); location.reload(); },
     setBalance(n) { state.balance = Math.max(0, Number(n) || 0); save(); paintBalance(); renderPanel(); },
-    panel() { panelForced = true; panelClosed = false; mountPanel(); }
+    panel() { panelForced = true; panelClosed = false; mountPanel(); },
+    lookup: lookupUser,
+    async spoof(username) {
+      state.spoof = Object.assign(await lookupUser(username), { active: true });
+      save();
+      location.reload();
+    },
+    unspoof() {
+      if (state.spoof) state.spoof.active = false;
+      save();
+      location.reload();
+    }
   };
 })();

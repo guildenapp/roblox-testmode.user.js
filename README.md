@@ -68,10 +68,32 @@ a changé.
 
 ## Utilisation
 
-- Le solde affiché dans l'en-tête est remplacé par la valeur simulée, en rouge
-  souligné en vague.
-- Dans **Paramètres**, un encadré rouge permet de fixer le solde, d'ajouter des
-  montants rapides, de désactiver le mode test et de consulter l'historique des
-  achats simulés.
-- Depuis la console : `rbxTest.panel()` ouvre le panneau en flottant,
-  `rbxTest.setBalance(n)` fixe le solde, `rbxTest.reset()` remet tout à zéro.
+Le panneau s'ajoute en haut des pages **Paramètres** et **Inventaire**, aux
+couleurs du site. Il contient trois cartes.
+
+**Robux** — fixe le solde simulé, ajoute des montants rapides, active ou coupe
+le mode test. Le solde de l'en-tête est réécrit, et les réponses de l'API
+économie sont réécrites elles aussi pour que le site affiche lui-même la valeur.
+
+**Identité** — cherche un pseudo sur le vrai Roblox et emprunte son apparence :
+nom affiché, pseudo, avatar, badge de certification, nombre d'abonnés et d'amis.
+Seule l'apparence change ; l'identifiant numérique du compte connecté est
+conservé, sinon les propres appels du site (inventaire, amis) casseraient.
+
+**Inventaire simulé** — les articles achetés en mode test sont conservés avec
+leur nom, leur prix et leur vignette réels, récupérés au passage sur les pages
+catalogue. Ils sont ajoutés aux réponses de l'API inventaire et à la grille de
+la page. Un interrupteur recharge la page après chaque achat, comme après un
+achat réel.
+
+Depuis la console : `rbxTest.panel()` ouvre le panneau en flottant,
+`rbxTest.setBalance(n)` fixe le solde, `rbxTest.spoof('pseudo')` emprunte une
+identité, `rbxTest.unspoof()` la rend, `rbxTest.reset()` remet tout à zéro.
+
+## Limites
+
+Rien ne quitte le navigateur : les achats sont interceptés avant l'envoi, et le
+serveur de Roblox ignore tout de ces articles et de ce solde. L'inventaire
+simulé disparaît sur un autre appareil, un autre navigateur ou après un vidage
+du stockage local. Le bandeau rouge est permanent et ne se masque pas sans
+éditer ce fichier.
