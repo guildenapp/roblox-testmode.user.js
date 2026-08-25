@@ -155,19 +155,33 @@
     '[data-testid="nav-robux-amount"]'
   ];
 
-  // Zones où un nombre isolé est forcément un solde (jamais un prix d'article).
-  const HEADER_SCOPES = [
-    '#header', '#navbar-robux', '#navigation-robux',
-    '.rbx-navbar-right', '[data-testid="navigation-header"]', 'header'
-  ];
+  // Conteneurs « robux » : à l'intérieur, un nombre isolé est forcément le solde.
+  // Le nom de la classe qui porte la valeur change au fil des refontes, donc on
+  // vise le conteneur (stable) plutôt que la valeur.
+  const ROBUX_CONTAINERS = [
+    '#navbar-robux', '#navigation-robux', '#nav-robux',
+    '[id*="robux" i]', '[class*="robux" i]', '[data-testid*="robux" i]'
+  ].join(', ');
 
-  const NUMERIC_RE = /^[\d.,\s  ]+$/;
+  // On ne sort jamais du header : ailleurs, un nombre isolé serait un prix.
+  const HEADER_ANCESTORS = 'header, nav, #header, .rbx-header, [data-testid*="header" i], [class*="navbar" i]';
+
+  const NUMERIC_RE = /^[\d.,\s\u00a0\u202f]+$/;
 
   function setText(el, txt) {
     if (el.dataset.rbxFake === txt) return;
     el.textContent = txt;
     el.dataset.rbxFake = txt;
     el.classList.add('rbx-fake-value');
+  }
+
+  // Remplace un élément-feuille dont le texte n'est qu'un nombre.
+  function paintLeaf(el, txt) {
+    if (el.children.length) return;                    // conteneur, pas la valeur
+    if (el.closest('#' + PANEL_ID)) return;            // pas notre propre panneau
+    const t = (el.textContent || '').trim();
+    if (!t || !NUMERIC_RE.test(t)) return;             // « Robux », icône, etc.
+    setText(el, txt);
   }
 
   function paintBalance() {
@@ -178,20 +192,11 @@
       document.querySelectorAll(sel).forEach(el => setText(el, txt));
     }
 
-    // Repli générique : dans le header, tout élément « robux » qui ne contient
-    // qu'un nombre est le solde, quel que soit le nom de classe du jour.
-    for (const scope of HEADER_SCOPES) {
-      document.querySelectorAll(scope).forEach(root => {
-        root.querySelectorAll('[id*="robux" i], [class*="robux" i], [data-testid*="robux" i]')
-          .forEach(el => {
-            if (el.children.length) return;                 // conteneur, pas la valeur
-            if (el.closest('#' + PANEL_ID)) return;          // pas notre propre panneau
-            const t = (el.textContent || '').trim();
-            if (!t || !NUMERIC_RE.test(t)) return;           // « Robux », icône, etc.
-            setText(el, txt);
-          });
-      });
-    }
+    document.querySelectorAll(ROBUX_CONTAINERS).forEach(box => {
+      if (!box.closest(HEADER_ANCESTORS)) return;
+      paintLeaf(box, txt);                             // le conteneur est lui-même la valeur
+      box.querySelectorAll('*').forEach(el => paintLeaf(el, txt));
+    });
   }
 
   // ---------- 3. INTERCEPTION RÉSEAU ----------
@@ -341,7 +346,8 @@
   }
 
   // ---------- 4. PANNEAU DANS LES PARAMÈTRES ----------
-  const SETTINGS_RE = /^\/(my\/account|settings)/i;
+  // Roblox préfixe ses URL par la locale : /fr/my/account, /en-us/settings…
+  const SETTINGS_RE = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:my\/account|settings)/i;
   const isSettingsPage = () =>
     SETTINGS_RE.test(location.pathname) || /#!?\/(settings|info|account)/i.test(location.hash);
 
