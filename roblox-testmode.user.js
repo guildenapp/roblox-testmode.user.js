@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.0
+// @version      1.1
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -746,29 +746,74 @@
     return touched ? JSON.stringify(data) : text;
   }
 
-  // La fenêtre d'achat de Roblox interroge d'abord la vérification en deux
-  // étapes et le code PIN. En mode test rien ne part vers Roblox, donc cette
-  // saisie ne validerait rien : on répond que ces protections ne sont pas
-  // armées, et l'achat simulé se conclut sans interruption. Le vrai réglage du
-  // compte n'est pas touché — seule la réponse lue par la page l'est.
-  const SECURITY_RE = /(two-?step-?verification|twostepverification|\/account\/pin|\/challenge\/v\d)/i;
+  // Deux protections différentes, à traiter en sens opposés — c'est le piège :
+  //
+  //   • le code PIN, s'il est armé, fait apparaître une demande de saisie ;
+  //     on le déclare donc inactif et déverrouillé ;
+  //   • la vérification en deux étapes, elle, doit être CONFIGURÉE pour que
+  //     Roblox autorise l'achat d'un objet limité. La déclarer inactive
+  //     provoque « Vérification en 2 étapes requise » et bloque tout. On la
+  //     déclare donc configurée et satisfaite.
+  //
+  // Le réglage réel du compte n'est pas modifié : seule la réponse lue par la
+  // page l'est, et en mode test aucune requête ne part vers Roblox de toute façon.
+  const SECURITY_RE =
+    /(two-?step-?verification|twostepverification|\/account\/pin|\/challenge\/v\d|user-settings)/i;
+
+  const VRAI_SI = /^(is)?(two-?step|2sv|twostepverification|twoStepVerification)/i;
+  const FAUX_SI = /pin/i;
 
   function neutraliseSecurite(url, data) {
     if (!SECURITY_RE.test(url)) return false;
     let touched = false;
 
-    for (const cle of ['isEnabled', 'enabled', 'twoStepVerificationEnabled',
-                       'isPinEnabled', 'required', 'isRequired', 'challengeRequired']) {
-      if (cle in data && data[cle] !== false) { data[cle] = false; touched = true; }
-    }
-    if (Array.isArray(data.methods) && data.methods.length) { data.methods = []; touched = true; }
-    if ('primaryMediaType' in data && data.primaryMediaType) { data.primaryMediaType = null; touched = true; }
-    if ('unlockedUntil' in data) {
-      // Code PIN considéré comme déjà déverrouillé pour l'heure qui vient.
+    // Code PIN : inactif, et déverrouillé pour l'heure qui vient.
+    if (/\/account\/pin/i.test(url)) {
+      data.isEnabled = false;
       data.unlockedUntil = Math.floor(Date.now() / 1000) + 3600;
-      touched = true;
+      return true;
+    }
+
+    // Vérification en deux étapes : configurée et active.
+    if (/two-?step-?verification/i.test(url)) {
+      if ('methods' in data || Array.isArray(data.methods)) {
+        data.methods = [{ mediaType: 'Authenticator', enabled: true, updated: new Date().toISOString() }];
+      }
+      if ('primaryMediaType' in data) data.primaryMediaType = 'Authenticator';
+      for (const cle of ['isEnabled', 'enabled', 'twoStepVerificationEnabled', 'isTwoStepVerificationEnabled']) {
+        if (cle in data) data[cle] = true;
+      }
+      return true;
+    }
+
+    // Un défi présenté au milieu d'une action : on le déclare franchi.
+    if (/\/challenge\/v\d/i.test(url)) {
+      for (const cle of ['challengeRequired', 'required', 'isRequired']) {
+        if (cle in data && data[cle] !== false) { data[cle] = false; touched = true; }
+      }
+      return touched;
+    }
+
+    // Réglages du compte : un même objet peut porter les deux protections.
+    for (const cle of Object.keys(data)) {
+      if (typeof data[cle] !== 'boolean') continue;
+      if (VRAI_SI.test(cle) && data[cle] !== true) { data[cle] = true; touched = true; }
+      else if (FAUX_SI.test(cle) && /enabled|required/i.test(cle) && data[cle] !== false) {
+        data[cle] = false; touched = true;
+      }
     }
     return touched;
+  }
+
+  // Certaines pages transportent l'état de la protection dans une balise meta
+  // rendue côté serveur, hors de toute requête interceptable.
+  function paintSecurityMeta() {
+    if (!state.enabled || !document.head) return;
+    document.head.querySelectorAll('meta[name*="two-step" i], meta[name*="twostep" i]')
+      .forEach(m => {
+        if (m.content === 'true') return;
+        m.content = 'true';
+      });
   }
 
   function spoofResponse(url, data) {
@@ -1433,6 +1478,7 @@
   // ---------- 8. BOUCLE D'ENTRETIEN ----------
   const tick = () => {
     injectBanner();
+    paintSecurityMeta();
     paintBalance();
     paintIdentity();
     paintInventory();
