@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.2
+// @version      1.3
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -735,24 +735,39 @@
     // Roblox émet beaucoup de requêtes : on écarte tout de suite ce qui ne nous
     // concerne pas, plutôt que de tenter un JSON.parse à chaque réponse.
     if (url.includes('roblox.com') && !INTERESTING.test(url)) return text;
+
+    // « is-owned » répond un booléen nu : sa réponse commence par « f » ou
+    // « t », et le préfiltre JSON la rejetait, ce qui rendait cette branche
+    // inatteignable.
+    const estOwned = IS_OWNED_RE.test(url);
     const c = text.charCodeAt(0);
-    if (c !== 123 && c !== 91) return text;   // ni « { » ni « [ » : pas du JSON
+    if (c !== 123 && c !== 91 && !estOwned) return text;   // ni « { » ni « [ » : pas du JSON
+
+    if (estOwned) {
+      const id = url.match(IS_OWNED_RE)[1];
+      if (ownsAsset(id)) return 'true';
+      return text;
+    }
 
     let data;
     try { data = JSON.parse(text); } catch { return text; }
-    if (data === null || typeof data !== 'object') {
-      // is-owned renvoie un booléen nu.
-      if (/inventory\.roblox\.com\/v1\/users\/\d+\/items\/\w+\/(\d+)\/is-owned/.test(url)) {
-        const id = url.match(/items\/\w+\/(\d+)\/is-owned/)[1];
-        if (ownsAsset(id)) return 'true';
-      }
-      return text;
-    }
+    if (data === null || typeof data !== 'object') return text;
 
     let touched = false;
 
     // -- caches passifs --
     if (/catalog\.roblox\.com\/v1\/catalog\/items\/details/.test(url)) captureCatalogDetails(data);
+
+    // -- articles acquis en mode test : signalés possédés dans leurs détails --
+    if (/(catalog|marketplace-items|marketplace-sales)[^?]*\/(details|items)/i.test(url) &&
+        Array.isArray(data.data)) {
+      for (const row of data.data) {
+        if (row && row.id != null && ownsAsset(row.id) && row.owned !== true) {
+          row.owned = true;
+          touched = true;
+        }
+      }
+    }
     if (/thumbnails\.roblox\.com\/v1\/assets\b/.test(url)) captureThumbnails(data);
 
     // -- vérification en deux étapes / code PIN --
@@ -891,6 +906,9 @@
 
   const ownsAsset = (assetId) =>
     state.owned.some(it => String(it.assetId) === String(assetId));
+
+  // Tous hôtes et toutes versions : c'est le chemin qui identifie l'endpoint.
+  const IS_OWNED_RE = /\/users\/\d+\/items\/[\w-]+\/([\w-]+)\/is-owned/i;
 
   function injectInventory(url, data) {
     const m = url.match(/inventory\.roblox\.com\/v\d\/users\/(\d+)\/inventory(?:\/(\d+))?/);
@@ -1184,6 +1202,44 @@
         '</div>';
       grid.insertBefore(card, grid.firstChild);
     }
+  }
+
+  // ---------- 6 bis. ÉTAT « POSSÉDÉ » SUR LA PAGE D'UN ARTICLE ----------
+  // L'API suffit quand la page l'interroge ; ceci couvre le cas où le bouton
+  // est rendu côté serveur, et c'est ce que l'on voit juste après l'achat,
+  // puisque la page se recharge.
+  const ITEM_PAGE_RE = /\/(?:catalog|bundles|library)\/(\d+)/;
+
+  const BUY_BUTTONS = [
+    '#item-container button', '#item-container a',
+    '.item-details button', '.PurchaseButton', '[data-testid*="purchase" i]',
+    'button.btn-growth-lg', 'a.btn-growth-lg', '[class*="purchase" i] button'
+  ].join(', ');
+
+  // On ne se fie pas à une classe : le libellé du bouton est plus stable.
+  const BUY_TEXT_RE = /^(acheter|buy|get|obtenir)\b/i;
+
+  function paintOwned() {
+    if (!state.enabled || !document.body) return;
+    const surLaPage = location.pathname.match(ITEM_PAGE_RE);
+    if (!surLaPage || !ownsAsset(surLaPage[1])) return;
+
+    document.querySelectorAll(BUY_BUTTONS).forEach(btn => {
+      if (btn.dataset.rbxOwned || btn.closest('#' + PANEL_ID)) return;
+      const libelle = normalise(btn.textContent);
+      if (!BUY_TEXT_RE.test(libelle)) return;
+
+      // La langue du bouton donne celle de la page, sans avoir à la deviner.
+      const enFrancais = /^(acheter|obtenir)/i.test(libelle);
+
+      btn.dataset.rbxOwned = '1';
+      btn.textContent = enFrancais ? 'Possédé' : 'Owned';
+      btn.title = 'Article acquis en mode test';
+      btn.setAttribute('aria-disabled', 'true');
+      if ('disabled' in btn) btn.disabled = true;
+      btn.style.pointerEvents = 'none';
+      btn.style.opacity = '.65';
+    });
   }
 
   // ---------- 7. PANNEAU ----------
@@ -1544,6 +1600,7 @@
     paintBalance();
     paintIdentity();
     paintInventory();
+    paintOwned();
     mountPanel();
     syncTheme();
   };
