@@ -1,7 +1,11 @@
+
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
 // @version      0.1
+// @version      0.3
+// @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
+// @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : affiche un solde fictif et simule les achats catalogue. Rien n'est envoyé à Roblox.
 // @match        https://*.roblox.com/*
 // @run-at       document-start
