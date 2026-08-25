@@ -75,10 +75,14 @@ couleurs du site. Il contient trois cartes.
 le mode test. Le solde de l'en-tête est réécrit, et les réponses de l'API
 économie sont réécrites elles aussi pour que le site affiche lui-même la valeur.
 
-**Identité** — cherche un pseudo sur le vrai Roblox et emprunte son apparence :
-nom affiché, pseudo, avatar, badge de certification, nombre d'abonnés et d'amis.
-Seule l'apparence change ; l'identifiant numérique du compte connecté est
-conservé, sinon les propres appels du site (inventaire, amis) casseraient.
+**Identité** — cherche un pseudo sur le vrai Roblox et emprunte son profil.
+Plutôt que de maquiller les réponses, le script réécrit l'URL des requêtes de
+profil : le site demande alors à Roblox les données du compte emprunté et
+affiche ses vrais amis, abonnés, badges, groupes, favoris et créations. La liste
+des endpoints détournés est une liste blanche (`PROFILE_ENDPOINTS`) ; tout ce
+qui touche au compte réel — solde, paramètres, inventaire simulé — reste
+intact. L'identifiant numérique du compte connecté est conservé, sinon les
+propres appels du site casseraient.
 
 **Inventaire simulé** — les articles achetés en mode test sont conservés avec
 leur nom, leur prix et leur vignette réels, récupérés au passage sur les pages

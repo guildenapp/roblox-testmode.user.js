@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      0.6
+// @version      0.7
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -271,6 +271,10 @@
       }
       /* La règle de taille du panneau ne porte pas jusqu'ici. */
       .rbx-tm-inv-card .rbx-tm-icon { width: 14px; height: 14px; flex: none; }
+      /* Badge de certification injecté dans la page, hors panneau. */
+      .rbx-tm-verified {
+        width: .85em; height: .85em; display: inline-block; vertical-align: -.08em;
+      }
     `;
     (document.head || document.documentElement).appendChild(s);
   }
@@ -407,6 +411,38 @@
 
   const spoofOn = () => state.enabled && state.spoof && state.spoof.active;
 
+  // Réécrire la réponse ne donnerait que le nom et l'avatar. En réécrivant
+  // l'URL, c'est Roblox lui-même qui renvoie les vrais amis, abonnés, badges,
+  // groupes et favoris du profil emprunté. Liste blanche stricte : tout ce qui
+  // touche à mon compte réel (paramètres, panier, achats) doit rester intact.
+  const PROFILE_ENDPOINTS = new RegExp([
+    'friends\\.roblox\\.com/v\\d+/users/',
+    'badges\\.roblox\\.com/v\\d+/users/',
+    'accountinformation\\.roblox\\.com/v\\d+/users/',
+    'groups\\.roblox\\.com/v\\d+/users/',
+    'avatar\\.roblox\\.com/v\\d+/users/',
+    'games\\.roblox\\.com/v\\d+/users/',
+    'premiumfeatures\\.roblox\\.com/v\\d+/users/',
+    'inventory\\.roblox\\.com/v\\d+/users/\\d+/(?:assets/collectibles|categories|favorites)',
+    'users\\.roblox\\.com/v\\d+/users/\\d+(?:$|[/?])'
+  ].join('|'));
+
+  function spoofUrl(url) {
+    if (!spoofOn() || !state.me || !state.spoof.id) return url;
+    const moi = String(state.me.id);
+    const lui = String(state.spoof.id);
+    if (moi === lui || !url.includes(moi)) return url;
+
+    // Les vignettes portent l'identifiant en query, parfois au milieu d'une liste.
+    if (/thumbnails\.roblox\.com\/v\d+\/users\//.test(url) && url.includes('userIds=')) {
+      return url.replace(/(\buserIds=)([\d%2C,]+)/i, (m, cle, liste) =>
+        cle + liste.split(/,|%2C/i).map(x => (x === moi ? lui : x)).join(','));
+    }
+
+    if (!PROFILE_ENDPOINTS.test(url)) return url;
+    return url.replace(new RegExp('(/users/)' + moi + '(?=$|[/?])'), '$1' + lui);
+  }
+
   // Remplacement dans le texte de la page. Idempotent : une fois le vrai nom
   // remplacé, il n'y a plus rien à trouver, donc aucune boucle avec l'observateur.
   const IDENT_SKIP = /^(SCRIPT|STYLE|TEXTAREA|INPUT|NOSCRIPT)$/;
@@ -442,6 +478,24 @@
     }
 
     swapAvatars(sp);
+    injectVerified(sp);
+  }
+
+  // Roblox affiche lui-même le badge quand l'API le signale ; ceci couvre les
+  // en-têtes rendus côté serveur, qui ne passent pas par cette API.
+  const NAME_HEADINGS = [
+    'h1', '.profile-display-name', '.profile-name',
+    '[class*="display-name" i]', '[data-testid*="display-name" i]'
+  ].join(', ');
+
+  function injectVerified(sp) {
+    if (!sp.hasVerifiedBadge) return;
+    document.querySelectorAll(NAME_HEADINGS).forEach(el => {
+      if (el.dataset.rbxVerified || el.closest('#' + PANEL_ID)) return;
+      if ((el.textContent || '').trim() !== sp.displayName) return;
+      el.dataset.rbxVerified = '1';
+      el.insertAdjacentHTML('beforeend', ' ' + VERIFIED_ICON);
+    });
   }
 
   // Les images rendues côté serveur ne passent pas par l'API vignettes :
@@ -505,12 +559,12 @@
   }
 
   // ---------- 5. INTERCEPTION RÉSEAU ----------
+  // Ces motifs doivent viser l'acte d'achat, et lui seul : le marketplace
+  // interroge « marketplace-sales/…/item » rien que pour afficher un article.
   const PURCHASE_PATTERNS = [
-    /\/v1\/purchases\/products\//,
-    /marketplace-sales\/v\d+\/item/,
-    /economy\.roblox\.com\/v1\/purchases/,
-    /apis\.roblox\.com\/marketplace-sales\//,
-    /\/v1\/gamepass\/\d+\/purchase/
+    /economy\.roblox\.com\/v\d+\/purchases\/products\/\d+/,
+    /marketplace-sales\/v\d+\/item\/[\w-]+\/purchase-item/,
+    /\/v1\/gamepass\/\d+\/purchase\b/
   ];
 
   const CURRENCY_PATTERNS = [
@@ -520,7 +574,10 @@
     /\/v1\/users\/\d+\/currency\/?(\?|$)/
   ];
 
-  const isPurchase = (url) => state.enabled && PURCHASE_PATTERNS.some(re => re.test(url));
+  // La méthode compte autant que l'URL : un GET ne peut pas être un achat.
+  const isPurchase = (url, method) =>
+    state.enabled && String(method).toUpperCase() === 'POST' &&
+    PURCHASE_PATTERNS.some(re => re.test(url));
   const isCurrency = (url) => state.enabled && CURRENCY_PATTERNS.some(re => re.test(url));
 
   // Toute réponse JSON qui nous intéresse passe ici, quel que soit le transport.
@@ -714,10 +771,23 @@
 
     console.log('[TEST MODE] achat simulé', item);
 
-    if (state.reloadAfterPurchase) {
-      // On laisse la confirmation de Roblox s'afficher avant de recharger.
-      setTimeout(() => location.reload(), RELOAD_DELAY);
-    }
+    if (state.reloadAfterPurchase) scheduleReload();
+  }
+
+  // Si un jour un endpoint est pris à tort pour un achat, ce garde-fou évite
+  // que le site devienne inutilisable : au pire un rechargement est perdu.
+  function scheduleReload() {
+    try {
+      const last = Number(sessionStorage.getItem('rbx_last_reload') || 0);
+      if (Date.now() - last < 8000) {
+        console.warn('[TEST MODE] rechargement ignoré : le précédent date de moins de 8 s');
+        return;
+      }
+      sessionStorage.setItem('rbx_last_reload', String(Date.now()));
+    } catch { /* stockage de session indisponible */ }
+
+    // On laisse la confirmation de Roblox s'afficher avant de recharger.
+    setTimeout(() => location.reload(), RELOAD_DELAY);
   }
 
   const purchaseResponseBody = () => JSON.stringify({
@@ -730,19 +800,25 @@
   // --- fetch ---
   window.fetch = async function (input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = String((init && init.method) || (input && input.method) || 'GET');
 
-    if (isPurchase(url)) {
+    if (isPurchase(url, method)) {
       applyPurchase(url, init && init.body, 0);
       return new Response(purchaseResponseBody(), {
         status: 200, headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    const res = await origFetch.apply(this, arguments);
+    const cible = spoofUrl(url);
+    const args = cible === url
+      ? arguments
+      : [typeof input === 'string' ? cible : new Request(cible, input), init];
+
+    const res = await origFetch.apply(this, args);
 
     try {
       const text = await res.clone().text();
-      const patched = transform(url, text);
+      const patched = transform(cible, text);
       if (patched !== text) {
         return new Response(patched, {
           status: res.status, statusText: res.statusText, headers: res.headers
@@ -759,7 +835,8 @@
   const origSend = XHR.prototype.send;
 
   XHR.prototype.open = function (method, url) {
-    this.__rbxUrl = String(url || '');
+    this.__rbxMethod = String(method || 'GET');
+    this.__rbxUrl = spoofUrl(String(url || ''));
 
     // Écouteur posé dès open() : il s'exécute donc avant ceux d'axios,
     // qui n'assigne ses handlers qu'entre open() et send().
@@ -778,13 +855,14 @@
       } catch { /* réponse illisible : on ne touche à rien */ }
     });
 
-    return origOpen.apply(this, arguments);
+    const reste = Array.prototype.slice.call(arguments, 2);
+    return origOpen.call(this, method, this.__rbxUrl, ...reste);
   };
 
   XHR.prototype.send = function (body) {
     const url = this.__rbxUrl || '';
 
-    if (isPurchase(url)) {
+    if (isPurchase(url, this.__rbxMethod)) {
       // On ne laisse PAS partir la requête : on fabrique la réponse.
       applyPurchase(url, body, 0);
       fakeXhrResponse(this, purchaseResponseBody());
