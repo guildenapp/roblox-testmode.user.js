@@ -300,9 +300,12 @@
   }
 
   // ---------- 2. FAUX SOLDE (DOM) ----------
+  // Identifiants réservés au solde de la barre de navigation. « text-robux »
+  // n'en fait surtout pas partie : Roblox s'en sert pour le prix des articles,
+  // y compris dans la fenêtre d'achat.
   const BALANCE_SELECTORS = [
     '#nav-robux-amount', '#nav-robux-balance', '#navbar-robux-amount',
-    '.text-robux-tab', '.text-robux',
+    '.text-robux-tab',
     '[data-testid="navigation-robux-amount"]', '[data-testid="nav-robux-amount"]'
   ];
 
@@ -312,7 +315,24 @@
   ].join(', ');
 
   const HEADER_ANCESTORS = 'header, nav, #header, .rbx-header, [data-testid*="header" i], [class*="navbar" i]';
-  const NUMERIC_RE = /^[\d.,\s  ]+$/;
+
+  // Un élément qui s'appelle « balance » est un solde où qu'il soit — c'est le
+  // cas de celui affiché en haut de la fenêtre d'achat. Un élément qui porte
+  // seulement « robux », lui, n'est un solde que dans l'en-tête.
+  const BALANCE_NAMED = [
+    '[id*="balance" i]', '[class*="balance" i]', '[data-testid*="balance" i]'
+  ].join(', ');
+  // Un nombre, éventuellement déjà abrégé (« 111M+ »), pour pouvoir le réécrire.
+  const NUMERIC_RE = /^[\d.,\s  ]+(?:[KMB]\+?)?$/i;
+
+  // Roblox abrège le solde dans la barre de navigation — et seulement là :
+  // la fenêtre d'achat, elle, affiche le montant complet.
+  function abbreviate(n) {
+    n = Number(n) || 0;
+    if (n >= 1e9) return Math.floor(n / 1e9) + 'B+';
+    if (n >= 1e6) return Math.floor(n / 1e6) + 'M+';
+    return fmt(n);
+  }
 
   function setText(el, txt) {
     if (el.dataset.rbxFake === txt) return;
@@ -332,13 +352,25 @@
 
   function paintBalance() {
     if (!state.enabled || !document.body) return;
-    const txt = fmt(state.balance);
+    // Abrégé dans la barre de navigation, complet partout ailleurs : c'est ce
+    // que fait Roblox lui-même.
+    const court = abbreviate(state.balance);
+    const complet = fmt(state.balance);
 
     for (const sel of BALANCE_SELECTORS) {
-      document.querySelectorAll(sel).forEach(el => setText(el, txt));
+      document.querySelectorAll(sel).forEach(el => setText(el, court));
     }
+
+    // Hors de l'en-tête, un montant en Robux est un prix, jamais le solde :
+    // on ne sort donc jamais de la barre de navigation.
     document.querySelectorAll(ROBUX_CONTAINERS).forEach(box => {
       if (!box.closest(HEADER_ANCESTORS)) return;
+      paintLeaf(box, court);
+      box.querySelectorAll('*').forEach(el => paintLeaf(el, court));
+    });
+
+    document.querySelectorAll(BALANCE_NAMED).forEach(box => {
+      const txt = box.closest(HEADER_ANCESTORS) ? court : complet;
       paintLeaf(box, txt);
       box.querySelectorAll('*').forEach(el => paintLeaf(el, txt));
     });
