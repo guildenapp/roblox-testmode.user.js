@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      0.9
+// @version      1.0
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -700,7 +700,8 @@
   const isCurrency = (url) => state.enabled && CURRENCY_PATTERNS.some(re => re.test(url));
 
   // Toute réponse JSON qui nous intéresse passe ici, quel que soit le transport.
-  const INTERESTING = /(economy|users|thumbnails|inventory|catalog|friends|apis|accountsettings)\.roblox\.com/;
+  const INTERESTING =
+    /(economy|users|thumbnails|inventory|catalog|friends|apis|accountsettings|auth|twostepverification|badges|groups|avatar|games|premiumfeatures)\.roblox\.com/;
 
   function transform(url, text) {
     if (!state.enabled || typeof text !== 'string' || !text) return text;
@@ -727,6 +728,9 @@
     if (/catalog\.roblox\.com\/v1\/catalog\/items\/details/.test(url)) captureCatalogDetails(data);
     if (/thumbnails\.roblox\.com\/v1\/assets\b/.test(url)) captureThumbnails(data);
 
+    // -- vérification en deux étapes / code PIN --
+    if (neutraliseSecurite(url, data)) touched = true;
+
     // -- solde --
     if (isCurrency(url) && 'robux' in data) {
       data.robux = state.balance;
@@ -740,6 +744,31 @@
     if (injectInventory(url, data)) touched = true;
 
     return touched ? JSON.stringify(data) : text;
+  }
+
+  // La fenêtre d'achat de Roblox interroge d'abord la vérification en deux
+  // étapes et le code PIN. En mode test rien ne part vers Roblox, donc cette
+  // saisie ne validerait rien : on répond que ces protections ne sont pas
+  // armées, et l'achat simulé se conclut sans interruption. Le vrai réglage du
+  // compte n'est pas touché — seule la réponse lue par la page l'est.
+  const SECURITY_RE = /(two-?step-?verification|twostepverification|\/account\/pin|\/challenge\/v\d)/i;
+
+  function neutraliseSecurite(url, data) {
+    if (!SECURITY_RE.test(url)) return false;
+    let touched = false;
+
+    for (const cle of ['isEnabled', 'enabled', 'twoStepVerificationEnabled',
+                       'isPinEnabled', 'required', 'isRequired', 'challengeRequired']) {
+      if (cle in data && data[cle] !== false) { data[cle] = false; touched = true; }
+    }
+    if (Array.isArray(data.methods) && data.methods.length) { data.methods = []; touched = true; }
+    if ('primaryMediaType' in data && data.primaryMediaType) { data.primaryMediaType = null; touched = true; }
+    if ('unlockedUntil' in data) {
+      // Code PIN considéré comme déjà déverrouillé pour l'heure qui vient.
+      data.unlockedUntil = Math.floor(Date.now() / 1000) + 3600;
+      touched = true;
+    }
+    return touched;
   }
 
   function spoofResponse(url, data) {
@@ -865,6 +894,8 @@
       assetId: meta ? meta.assetId : (onPage ? Number(onPage[1]) : null),
       assetType: meta ? meta.assetType : null,
       itemType: meta ? meta.itemType : 'Asset',
+      productId: (meta && meta.productId) || (p ? Number(p[1]) : null),
+      collectibleItemId: (meta && meta.collectibleItemId) || (c ? c[1] : null),
       name: (meta && meta.name) || pageItemName() || 'Article simulé',
       creatorName: (meta && meta.creatorName) || '',
       thumb: (meta && meta.thumb) || '',
@@ -890,29 +921,59 @@
 
     console.log('[TEST MODE] achat simulé', item);
 
-    if (state.reloadAfterPurchase) scheduleReload();
+    if (state.reloadAfterPurchase) scheduleReload(url);
+    return item;
   }
 
   // Si un jour un endpoint est pris à tort pour un achat, ce garde-fou évite
   // que le site devienne inutilisable : au pire un rechargement est perdu.
-  function scheduleReload() {
+  function scheduleReload(url) {
+    // Le garde-fou ne vise que la répétition d'un même appel — deux achats
+    // différents coup sur coup doivent tous les deux recharger.
     try {
-      const last = Number(sessionStorage.getItem('rbx_last_reload') || 0);
-      if (Date.now() - last < 8000) {
-        console.warn('[TEST MODE] rechargement ignoré : le précédent date de moins de 8 s');
+      const cle = 'rbx_last_reload';
+      const [urlPrec, tPrec] = String(sessionStorage.getItem(cle) || '|0').split('|');
+      if (urlPrec === url && Date.now() - Number(tPrec) < 8000) {
+        console.warn('[TEST MODE] rechargement ignoré : même requête il y a moins de 8 s');
         return;
       }
-      sessionStorage.setItem('rbx_last_reload', String(Date.now()));
+      sessionStorage.setItem(cle, url + '|' + Date.now());
     } catch { /* stockage de session indisponible */ }
 
     // On laisse la confirmation de Roblox s'afficher avant de recharger.
     setTimeout(() => location.reload(), RELOAD_DELAY);
   }
 
-  const purchaseResponseBody = () => JSON.stringify({
+  // Deux formats de réponse coexistent selon l'endpoint d'achat. Un champ en
+  // trop est sans effet ; un champ manquant fait lever une exception au script
+  // de Roblox, qui laisse alors sa fenêtre modale ouverte et la page bloquée.
+  // On renvoie donc la réunion des deux formats.
+  const purchaseResponseBody = (item) => JSON.stringify({
     purchased: true,
     reason: 'Success',
-    showDivId: 'TestMode',
+    purchaseResult: 'Success',
+    statusCode: 200,
+    title: '',
+    errorMsg: '',
+    errorMessage: null,
+    showDivId: 'ItemPurchased',
+    shortfallPrice: 0,
+    balanceAfterSale: state.balance,
+    expectedPrice: item.price,
+    price: item.price,
+    currency: 1,
+    productId: item.productId || 0,
+    assetId: item.assetId || 0,
+    assetName: item.name,
+    assetType: item.assetType || 0,
+    assetTypeDisplayName: '',
+    assetIsWearable: true,
+    collectibleItemId: item.collectibleItemId || null,
+    sellerName: item.creatorName || 'Roblox',
+    transactionVerb: 'bought',
+    isMultiPrivateSale: false,
+    quantity: 1,
+    transactionId: 'testmode-' + item.at,
     testMode: true          // marqueur laissé volontairement dans la réponse
   });
 
@@ -922,8 +983,8 @@
     const method = String((init && init.method) || (input && input.method) || 'GET');
 
     if (isPurchase(url, method)) {
-      applyPurchase(url, init && init.body, 0);
-      return new Response(purchaseResponseBody(), {
+      const item = applyPurchase(url, init && init.body, 0);
+      return new Response(purchaseResponseBody(item), {
         status: 200, headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -983,8 +1044,8 @@
 
     if (isPurchase(url, this.__rbxMethod)) {
       // On ne laisse PAS partir la requête : on fabrique la réponse.
-      applyPurchase(url, body, 0);
-      fakeXhrResponse(this, purchaseResponseBody());
+      const item = applyPurchase(url, body, 0);
+      fakeXhrResponse(this, purchaseResponseBody(item));
       return;
     }
 
@@ -1004,9 +1065,10 @@
       String(h).toLowerCase() === 'content-type' ? 'application/json' : null;
 
     setTimeout(() => {
+      // dispatchEvent déclenche déjà les gestionnaires posés en propriété
+      // (onload, onreadystatechange) : les appeler en plus ferait traiter
+      // l'achat deux fois, ce qui laissait la fenêtre modale bloquée.
       for (const type of ['readystatechange', 'load', 'loadend']) {
-        const handler = xhr['on' + type];
-        if (typeof handler === 'function') handler.call(xhr, new Event(type));
         xhr.dispatchEvent(new Event(type));
       }
     }, 0);
