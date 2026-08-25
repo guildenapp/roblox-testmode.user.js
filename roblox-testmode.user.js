@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      0.7
+// @version      0.9
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -408,12 +408,13 @@
     if (!found.length) throw new Error('aucun compte nommé « ' + username + ' »');
 
     const id = found[0].id;
-    const [detail, headshot, avatar, friends, followers] = await Promise.all([
+    const [detail, headshot, avatar, friends, followers, followings] = await Promise.all([
       getJson('https://users.roblox.com/v1/users/' + id),
       getJson('https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=' + id + '&size=150x150&format=Png&isCircular=false'),
       getJson('https://thumbnails.roblox.com/v1/users/avatar?userIds=' + id + '&size=420x420&format=Png&isCircular=false'),
       getJson('https://friends.roblox.com/v1/users/' + id + '/friends/count'),
-      getJson('https://friends.roblox.com/v1/users/' + id + '/followers/count')
+      getJson('https://friends.roblox.com/v1/users/' + id + '/followers/count'),
+      getJson('https://friends.roblox.com/v1/users/' + id + '/followings/count')
     ]);
 
     const pick = (t) => (t && t.data && t.data[0] && t.data[0].imageUrl) || '';
@@ -428,7 +429,8 @@
       headshotUrl: pick(headshot),
       avatarUrl: pick(avatar),
       friendCount: (friends && friends.count) || 0,
-      followerCount: (followers && followers.count) || 0
+      followerCount: (followers && followers.count) || 0,
+      followingCount: (followings && followings.count) || 0
     };
   }
 
@@ -471,7 +473,11 @@
         cle + liste.split(/,|%2C/i).map(x => (x === moi ? lui : x)).join(','));
     }
 
-    if (!PROFILE_ENDPOINTS.test(url)) return url;
+    // Ces compteurs changent d'hôte au fil des refontes : on accepte donc
+    // aussi la reconnaissance par le chemin, quel que soit l'hôte Roblox.
+    const parChemin = new RegExp(
+      '/v\\d+/users/' + moi + '/(?:friends|followers|followings|badges|groups|favorites)');
+    if (!PROFILE_ENDPOINTS.test(url) && !parChemin.test(url)) return url;
     return url.replace(new RegExp('(/users/)' + moi + '(?=$|[/?])'), '$1' + lui);
   }
 
@@ -511,23 +517,104 @@
 
     swapAvatars(sp);
     injectVerified(sp);
+    paintCounts(sp);
   }
 
   // Roblox affiche lui-même le badge quand l'API le signale ; ceci couvre les
   // en-têtes rendus côté serveur, qui ne passent pas par cette API.
   const NAME_HEADINGS = [
-    'h1', '.profile-display-name', '.profile-name',
-    '[class*="display-name" i]', '[data-testid*="display-name" i]'
+    'h1', 'h2', '.profile-display-name', '.profile-name', '.profile-header-title',
+    '[class*="display-name" i]', '[class*="displayname" i]',
+    '[data-testid*="display-name" i]', '[data-testid*="displayname" i]'
   ].join(', ');
+
+  const normalise = (t) => String(t || '').replace(/\s+/g, ' ').trim();
 
   function injectVerified(sp) {
     if (!sp.hasVerifiedBadge) return;
     document.querySelectorAll(NAME_HEADINGS).forEach(el => {
       if (el.dataset.rbxVerified || el.closest('#' + PANEL_ID)) return;
-      if ((el.textContent || '').trim() !== sp.displayName) return;
+      if (el.querySelector('.rbx-tm-verified')) return;
+      if (normalise(el.textContent) !== normalise(sp.displayName)) return;
       el.dataset.rbxVerified = '1';
       el.insertAdjacentHTML('beforeend', ' ' + VERIFIED_ICON);
     });
+  }
+
+  // Sur la page de profil, les compteurs sont rendus côté serveur : il n'y a
+  // aucune requête à détourner, il faut donc les réécrire dans la page.
+  const PROFILE_PAGE_RE = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?users\/\d+\/profile/i;
+  const isProfilePage = () => PROFILE_PAGE_RE.test(location.pathname);
+
+  const COUNT_LABELS = [
+    { re: /^(amis|friends)$/i, cle: 'friendCount' },
+    { re: /^(abonn[ée]s?|followers?)$/i, cle: 'followerCount' },
+    { re: /^(abonnements?|following)$/i, cle: 'followingCount' }
+  ];
+
+  const COUNT_VALUE_RE = /^[\d.,\s\u00a0\u202f]+[KMB]?$/i;
+  const COUNT_COMBINED_RE = /^([\d.,\s\u00a0\u202f]+[KMB]?) (.+)$/i;
+
+  // Roblox abrège les compteurs avec une décimale : « 191.9K ».
+  function abbrevCount(n) {
+    n = Number(n) || 0;
+    const court = (v, unite) => (Math.round(v * 10) / 10) + unite;
+    if (n >= 1e9) return court(n / 1e9, 'B');
+    if (n >= 1e6) return court(n / 1e6, 'M');
+    if (n >= 1e3) return court(n / 1e3, 'K');
+    return String(n);
+  }
+
+  function setCount(el, txt) {
+    if (el.dataset.rbxCount === txt) return;
+    el.textContent = txt;
+    el.dataset.rbxCount = txt;
+    el.title = 'Compteur du profil emprunté — mode test';
+  }
+
+  function paintCounts(sp) {
+    if (!isProfilePage()) return;
+
+    document.querySelectorAll('span, div, p, li, a, h2, h3, b, strong').forEach(el => {
+      if (el.children.length || el.closest('#' + PANEL_ID)) return;
+      const texte = normalise(el.textContent);
+      if (!texte) return;
+
+      // Cas 1 : nombre et étiquette dans le même élément (« 12 Amis »).
+      const ensemble = texte.match(COUNT_COMBINED_RE);
+      if (ensemble) {
+        const lab = COUNT_LABELS.find(l => l.re.test(ensemble[2]));
+        if (lab) setCount(el, abbrevCount(sp[lab.cle]) + ' ' + ensemble[2]);
+        return;
+      }
+
+      // Cas 2 : étiquette et nombre dans deux éléments voisins.
+      const lab = COUNT_LABELS.find(l => l.re.test(texte));
+      if (!lab) return;
+      const cible = nombreVoisin(el);
+      if (cible) setCount(cible, abbrevCount(sp[lab.cle]));
+    });
+  }
+
+  // Le nombre précède généralement son étiquette : on regarde le frère d'avant
+  // en premier, puis autour, sans jamais quitter le voisinage immédiat.
+  function nombreVoisin(labelEl) {
+    const zones = [
+      labelEl.previousElementSibling,
+      labelEl.nextElementSibling,
+      labelEl.parentElement,
+      labelEl.parentElement && labelEl.parentElement.parentElement
+    ];
+    const estNombre = (e) =>
+      e && e !== labelEl && !e.children.length && COUNT_VALUE_RE.test(normalise(e.textContent));
+
+    for (const zone of zones) {
+      if (!zone) continue;
+      if (estNombre(zone)) return zone;
+      const dedans = Array.prototype.find.call(zone.querySelectorAll('*'), estNombre);
+      if (dedans) return dedans;
+    }
+    return null;
   }
 
   // Les images rendues côté serveur ne passent pas par l'API vignettes :

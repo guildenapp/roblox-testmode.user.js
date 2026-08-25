@@ -84,6 +84,12 @@ qui touche au compte réel — solde, paramètres, inventaire simulé — reste
 intact. L'identifiant numérique du compte connecté est conservé, sinon les
 propres appels du site casseraient.
 
+Les compteurs de la page de profil sont rendus côté serveur : il n'y a pas de
+requête à détourner, ils sont donc réécrits directement dans la page, repérés
+par leur étiquette (« Amis », « Abonnés », « Abonnements ») et abrégés comme
+Roblox le fait (`191.9K`). Le badge de certification est injecté à côté du nom
+affiché.
+
 **Inventaire simulé** — les articles achetés en mode test sont conservés avec
 leur nom, leur prix et leur vignette réels, récupérés au passage sur les pages
 catalogue. Ils sont ajoutés aux réponses de l'API inventaire et à la grille de
