@@ -2,10 +2,10 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      0.4
+// @version      0.5
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
-// @description  Bac à sable local : affiche un solde fictif, simule les achats catalogue et ajoute un panneau de réglage dans les paramètres Roblox. Rien n'est envoyé à Roblox.
+// @description  Bac à sable local : affiche un solde fictif, simule les achats catalogue et ajoute un panneau de réglage aux couleurs de Roblox dans les paramètres. Rien n'est envoyé à Roblox.
 // @match        https://*.roblox.com/*
 // @run-at       document-start
 // @grant        none
@@ -45,6 +45,28 @@
   // Volontairement impossible à masquer sans éditer ce fichier.
   const BANNER_ID = 'rbx-testmode-banner';
   const PANEL_ID = 'rbx-testmode-panel';
+
+  // Hexagone évidé : la même forme que l'icône Robux du site.
+  const ROBUX_ICON =
+    '<svg class="rbx-tm-icon" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path fill="currentColor" fill-rule="evenodd" d="M12 1.5 21.09 6.75v10.5L12 22.5 2.91 17.25V6.75L12 1.5Z' +
+    'M12 7 7.67 9.5v5L12 17l4.33-2.5v-5L12 7Z"/></svg>';
+
+  // Roblox marque son thème sur <body> ; on s'y aligne au lieu de suivre l'OS,
+  // sinon le panneau s'affiche en sombre sur un site resté en clair.
+  function currentTheme() {
+    const cls = document.body ? document.body.className : '';
+    if (/\bdark-theme\b/.test(cls)) return 'dark';
+    if (/\blight-theme\b/.test(cls)) return 'light';
+    return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+
+  function syncTheme() {
+    if (!panelEl || !panelEl.isConnected) return;
+    const t = currentTheme();
+    // On n'écrit que si ça change : sinon le MutationObserver se rappellerait lui-même.
+    if (panelEl.dataset.rbxTheme !== t) panelEl.dataset.rbxTheme = t;
+  }
   const BAR_H = 34;
 
   function injectStyle() {
@@ -52,86 +74,139 @@
     const s = document.createElement('style');
     s.id = 'rbx-testmode-style';
     s.textContent = `
+      /* ----- Bandeau permanent, en bas de l'écran ----- */
       #${BANNER_ID} {
-        position: fixed; top: 0; left: 0; right: 0; height: ${BAR_H}px;
+        position: fixed; bottom: 0; left: 0; right: 0; height: ${BAR_H}px;
         z-index: 2147483647;
         background: repeating-linear-gradient(45deg, #b3261e 0 12px, #8c1d16 12px 24px);
         color: #fff; font: 700 13px/${BAR_H}px system-ui, sans-serif;
         letter-spacing: .12em; text-align: center; text-transform: uppercase;
         pointer-events: none; user-select: none;
       }
-      html { padding-top: ${BAR_H}px !important; }
-      .rbx-fake-value {
-        color: #b3261e !important;
-        text-decoration: underline wavy #b3261e 1px !important;
-      }
+      html { padding-bottom: ${BAR_H}px !important; }
 
-      /* ----- Panneau de réglage ----- */
+      /* ----- Panneau : jetons repris du design system Roblox ----- */
       #${PANEL_ID} {
-        border: 2px dashed #b3261e; border-radius: 10px;
-        background: #fff; color: #1b1b1b;
-        font: 400 14px/1.45 system-ui, -apple-system, sans-serif;
-        padding: 16px 18px; margin: 0 0 20px; box-sizing: border-box;
+        --rbx-card: #ffffff;
+        --rbx-text: #1b1d1f;
+        --rbx-muted: #6b6d6f;
+        --rbx-border: #e3e5e6;
+        --rbx-divider: #ececed;
+        --rbx-subtle: #f2f4f5;
+        --rbx-blue: #335fff;
+        --rbx-blue-dark: #2b51d9;
+        --rbx-red: #b3261e;
+
+        background: var(--rbx-card);
+        border: 1px solid var(--rbx-border);
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin: 0 0 24px;
+        color: var(--rbx-text);
+        /* On hérite de la police de Roblox (Builder Sans) : rien à déclarer. */
+        font-size: 15px; line-height: 1.4;
+        box-sizing: border-box;
+      }
+      #${PANEL_ID}[data-rbx-theme="dark"] {
+        --rbx-card: #2f3133;
+        --rbx-text: #ffffff;
+        --rbx-muted: #bdbebe;
+        --rbx-border: #393b3d;
+        --rbx-divider: #393b3d;
+        --rbx-subtle: #393b3d;
       }
       #${PANEL_ID}.rbx-panel-floating {
-        position: fixed; top: ${BAR_H + 12}px; right: 12px; width: 340px;
+        position: fixed; top: 12px; right: 12px; width: 360px;
         max-height: calc(100vh - ${BAR_H + 24}px); overflow: auto;
-        z-index: 2147483646; box-shadow: 0 8px 30px rgba(0,0,0,.28);
+        z-index: 2147483646; box-shadow: 0 8px 30px rgba(0,0,0,.24);
       }
       #${PANEL_ID} * { box-sizing: border-box; font-family: inherit; }
-      #${PANEL_ID} .rbx-p-head {
-        display: flex; align-items: center; gap: 8px;
-        font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
-        font-size: 12px; color: #b3261e; margin-bottom: 12px;
+
+      #${PANEL_ID} .rbx-tm-head { display: flex; align-items: center; gap: 10px; }
+      #${PANEL_ID} .rbx-tm-head h2 {
+        margin: 0; padding: 0; border: 0;
+        font-size: 20px; font-weight: 700; color: inherit;
       }
-      #${PANEL_ID} .rbx-p-head .rbx-p-close {
-        margin-left: auto; cursor: pointer; border: 0; background: none;
-        font-size: 18px; line-height: 1; color: #666; padding: 0 4px;
+      #${PANEL_ID} .rbx-tm-badge {
+        background: var(--rbx-red); color: #fff;
+        font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+        padding: 4px 8px; border-radius: 6px;
       }
-      #${PANEL_ID} label.rbx-p-label {
-        display: block; font-weight: 600; font-size: 13px; margin: 0 0 6px;
+      #${PANEL_ID} .rbx-tm-close {
+        margin-left: auto; background: none; border: 0; cursor: pointer;
+        color: var(--rbx-muted); font-size: 22px; line-height: 1; padding: 0 4px;
       }
-      #${PANEL_ID} .rbx-p-row { display: flex; gap: 8px; align-items: center; }
-      #${PANEL_ID} input[type="number"] {
-        flex: 1; min-width: 0; padding: 8px 10px; font-size: 15px;
-        border: 1px solid #c9c9c9; border-radius: 6px; background: #fff; color: #1b1b1b;
+      #${PANEL_ID} .rbx-tm-sub { color: var(--rbx-muted); font-size: 13px; margin: 4px 0 8px; }
+
+      #${PANEL_ID} .rbx-tm-row {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+        padding: 16px 0; border-top: 1px solid var(--rbx-divider);
       }
-      #${PANEL_ID} button.rbx-p-btn {
-        padding: 8px 12px; border-radius: 6px; border: 1px solid #b3261e;
-        background: #b3261e; color: #fff; font-size: 13px; font-weight: 600;
-        cursor: pointer; white-space: nowrap;
+      #${PANEL_ID} .rbx-tm-row.rbx-tm-block { display: block; }
+      #${PANEL_ID} .rbx-tm-rowhead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      #${PANEL_ID} .rbx-tm-label { font-weight: 600; }
+      #${PANEL_ID} .rbx-tm-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+      #${PANEL_ID} .rbx-tm-grow { flex: 1 1 240px; display: flex; gap: 10px; }
+      #${PANEL_ID} .rbx-tm-amount { font-weight: 700; font-size: 18px; gap: 6px; }
+      #${PANEL_ID} .rbx-tm-icon { width: 16px; height: 16px; flex: none; }
+      #${PANEL_ID} .rbx-tm-chips { flex-wrap: wrap; }
+
+      #${PANEL_ID} .rbx-tm-input {
+        flex: 1; min-width: 0; font-size: 16px;
+        padding: 10px 14px; border-radius: 8px;
+        border: 1px solid var(--rbx-border);
+        background: var(--rbx-card); color: var(--rbx-text);
       }
-      #${PANEL_ID} button.rbx-p-btn.rbx-p-ghost {
-        background: #fff; color: #b3261e;
+      #${PANEL_ID} .rbx-tm-input:focus {
+        outline: 2px solid var(--rbx-blue); outline-offset: -1px; border-color: transparent;
       }
-      #${PANEL_ID} button.rbx-p-btn:hover { filter: brightness(.94); }
-      #${PANEL_ID} .rbx-p-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-      #${PANEL_ID} .rbx-p-quick button { font-size: 12px; padding: 5px 9px; }
-      #${PANEL_ID} .rbx-p-current {
-        font-size: 13px; color: #444; margin: 10px 0 0;
+
+      #${PANEL_ID} .rbx-tm-btn {
+        font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;
+        padding: 10px 18px; border-radius: 8px; border: 0;
+        background: var(--rbx-subtle); color: var(--rbx-text);
       }
-      #${PANEL_ID} .rbx-p-current b { color: #b3261e; font-size: 16px; }
-      #${PANEL_ID} .rbx-p-sep { border: 0; border-top: 1px solid #e6e6e6; margin: 14px 0; }
-      #${PANEL_ID} .rbx-p-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-      #${PANEL_ID} .rbx-p-hist { margin: 8px 0 0; padding: 0; list-style: none;
-        max-height: 150px; overflow: auto; font-size: 12px; color: #444; }
-      #${PANEL_ID} .rbx-p-hist li {
-        display: flex; justify-content: space-between; gap: 10px;
-        padding: 4px 0; border-bottom: 1px solid #f0f0f0;
+      #${PANEL_ID} .rbx-tm-btn:hover { filter: brightness(.96); }
+      #${PANEL_ID} .rbx-tm-btn.rbx-tm-primary { background: var(--rbx-blue); color: #fff; }
+      #${PANEL_ID} .rbx-tm-btn.rbx-tm-primary:hover { background: var(--rbx-blue-dark); filter: none; }
+      #${PANEL_ID} .rbx-tm-chips .rbx-tm-btn { padding: 8px 14px; font-size: 13px; }
+
+      /* Interrupteur repris de celui des paramètres Roblox. */
+      #${PANEL_ID} .rbx-tm-switch { position: relative; width: 48px; height: 28px; flex: none; }
+      #${PANEL_ID} .rbx-tm-switch input {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        margin: 0; opacity: 0; cursor: pointer; z-index: 1;
       }
-      #${PANEL_ID} .rbx-p-hist li span:first-child {
+      #${PANEL_ID} .rbx-tm-switch i {
+        position: absolute; inset: 0; border-radius: 999px;
+        background: var(--rbx-subtle); border: 1px solid var(--rbx-border);
+        transition: background .15s, border-color .15s;
+      }
+      #${PANEL_ID} .rbx-tm-switch i::after {
+        content: ''; position: absolute; top: 3px; left: 3px;
+        width: 20px; height: 20px; border-radius: 50%;
+        background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+        transition: transform .15s;
+      }
+      #${PANEL_ID} .rbx-tm-switch input:checked + i {
+        background: var(--rbx-blue); border-color: var(--rbx-blue);
+      }
+      #${PANEL_ID} .rbx-tm-switch input:checked + i::after { transform: translateX(20px); }
+
+      #${PANEL_ID} .rbx-tm-hist {
+        list-style: none; margin: 8px 0 0; padding: 0;
+        max-height: 180px; overflow: auto;
+      }
+      #${PANEL_ID} .rbx-tm-hist li {
+        display: flex; justify-content: space-between; gap: 12px;
+        padding: 10px 0; border-top: 1px solid var(--rbx-divider);
+        font-size: 14px; color: var(--rbx-muted);
+      }
+      #${PANEL_ID} .rbx-tm-hist li span:first-child {
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
-      #${PANEL_ID} .rbx-p-empty { font-size: 12px; color: #888; font-style: italic; margin-top: 8px; }
-      #${PANEL_ID} .rbx-p-note { font-size: 11px; color: #888; margin-top: 12px; }
-      @media (prefers-color-scheme: dark) {
-        #${PANEL_ID} { background: #1e1e1e; color: #ededed; }
-        #${PANEL_ID} input[type="number"] { background: #2a2a2a; color: #ededed; border-color: #444; }
-        #${PANEL_ID} button.rbx-p-btn.rbx-p-ghost { background: #2a2a2a; }
-        #${PANEL_ID} .rbx-p-current, #${PANEL_ID} .rbx-p-hist { color: #bdbdbd; }
-        #${PANEL_ID} .rbx-p-sep { border-top-color: #3a3a3a; }
-        #${PANEL_ID} .rbx-p-hist li { border-bottom-color: #2f2f2f; }
-      }
+      #${PANEL_ID} .rbx-tm-empty { color: var(--rbx-muted); font-size: 14px; margin: 12px 0 0; }
+      #${PANEL_ID} .rbx-tm-note { color: var(--rbx-muted); font-size: 12px; margin: 16px 0 0; }
     `;
     (document.head || document.documentElement).appendChild(s);
   }
@@ -178,6 +253,7 @@
     el.textContent = txt;
     el.dataset.rbxFake = txt;
     el.classList.add('rbx-fake-value');
+    el.title = 'Solde simulé — mode test';
   }
 
   // Remplace un élément-feuille dont le texte n'est qu'un nombre.
@@ -366,50 +442,72 @@
 
   let panelEl = null;
   let panelForced = false;   // ouvert manuellement hors page paramètres
+  let panelClosed = false;   // fermé à la croix : à respecter jusqu'à la prochaine navigation
 
   function buildPanel() {
     const el = document.createElement('div');
     el.id = PANEL_ID;
     el.innerHTML = `
-      <div class="rbx-p-head">
-        <span>Test mode — solde fictif</span>
-        <button class="rbx-p-close" type="button" title="Fermer">&times;</button>
+      <div class="rbx-tm-head">
+        <h2>Robux</h2>
+        <span class="rbx-tm-badge">Mode test</span>
+        <button class="rbx-tm-close" type="button" title="Fermer">&times;</button>
       </div>
-      <label class="rbx-p-label" for="rbx-p-input">Solde Robux simulé</label>
-      <div class="rbx-p-row">
-        <input id="rbx-p-input" type="number" min="0" step="1" />
-        <button class="rbx-p-btn" data-act="apply" type="button">Appliquer</button>
+      <p class="rbx-tm-sub">Solde simulé, visible uniquement dans ce navigateur.</p>
+
+      <div class="rbx-tm-row">
+        <span class="rbx-tm-label">Solde actuel</span>
+        <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="current">0</span></span>
       </div>
-      <div class="rbx-p-quick">
-        <button class="rbx-p-btn rbx-p-ghost" data-add="1000" type="button">+1 000</button>
-        <button class="rbx-p-btn rbx-p-ghost" data-add="10000" type="button">+10 000</button>
-        <button class="rbx-p-btn rbx-p-ghost" data-add="100000" type="button">+100 000</button>
-        <button class="rbx-p-btn rbx-p-ghost" data-add="1000000" type="button">+1 000 000</button>
-        <button class="rbx-p-btn rbx-p-ghost" data-act="zero" type="button">Mettre à 0</button>
+
+      <div class="rbx-tm-row">
+        <span class="rbx-tm-label">Modifier</span>
+        <span class="rbx-tm-grow">
+          <input class="rbx-tm-input" id="rbx-p-input" type="number" min="0" step="1" inputmode="numeric" />
+          <button class="rbx-tm-btn rbx-tm-primary" data-act="apply" type="button">Appliquer</button>
+        </span>
       </div>
-      <p class="rbx-p-current">Solde actuel : <b data-role="current">0</b> Robux</p>
-      <hr class="rbx-p-sep" />
-      <label class="rbx-p-toggle">
-        <input type="checkbox" data-act="enabled" />
-        <span>Mode test actif (faux solde + achats simulés)</span>
-      </label>
-      <hr class="rbx-p-sep" />
-      <label class="rbx-p-label">Achats simulés (<span data-role="count">0</span>)</label>
-      <ul class="rbx-p-hist" data-role="hist"></ul>
-      <p class="rbx-p-empty" data-role="empty">Aucun achat simulé pour l'instant.</p>
-      <div class="rbx-p-quick">
-        <button class="rbx-p-btn rbx-p-ghost" data-act="clear-hist" type="button">Vider l'historique</button>
-        <button class="rbx-p-btn rbx-p-ghost" data-act="reset" type="button">Tout réinitialiser</button>
+
+      <div class="rbx-tm-row">
+        <span class="rbx-tm-label">Ajouter</span>
+        <span class="rbx-tm-right rbx-tm-chips">
+          <button class="rbx-tm-btn" data-add="1000" type="button">+1 000</button>
+          <button class="rbx-tm-btn" data-add="10000" type="button">+10 000</button>
+          <button class="rbx-tm-btn" data-add="100000" type="button">+100 000</button>
+          <button class="rbx-tm-btn" data-add="1000000" type="button">+1 000 000</button>
+          <button class="rbx-tm-btn" data-act="zero" type="button">Mettre à 0</button>
+        </span>
       </div>
-      <p class="rbx-p-note">Local uniquement : rien n'est envoyé à Roblox, aucun Robux réel n'est débité ni crédité.</p>
+
+      <div class="rbx-tm-row">
+        <span class="rbx-tm-label">Mode test actif</span>
+        <span class="rbx-tm-right">
+          <label class="rbx-tm-switch"><input type="checkbox" data-act="enabled" /><i></i></label>
+        </span>
+      </div>
+
+      <div class="rbx-tm-row rbx-tm-block">
+        <div class="rbx-tm-rowhead">
+          <span class="rbx-tm-label">Achats simulés (<span data-role="count">0</span>)</span>
+          <span class="rbx-tm-right rbx-tm-chips">
+            <button class="rbx-tm-btn" data-act="clear-hist" type="button">Vider</button>
+            <button class="rbx-tm-btn" data-act="reset" type="button">Réinitialiser</button>
+          </span>
+        </div>
+        <ul class="rbx-tm-hist" data-role="hist"></ul>
+        <p class="rbx-tm-empty" data-role="empty">Aucun achat simulé pour l'instant.</p>
+      </div>
+
+      <p class="rbx-tm-note">Local uniquement : rien n'est envoyé à Roblox, aucun Robux réel n'est débité ni crédité.</p>
     `;
 
     el.addEventListener('click', (e) => {
       const btn = e.target.closest('button');
       if (!btn) return;
 
-      if (btn.classList.contains('rbx-p-close')) {
+      if (btn.classList.contains('rbx-tm-close')) {
         panelForced = false;
+        panelClosed = true;   // sans ça, la boucle d'entretien le remonterait aussitôt
         el.remove();
         return;
       }
@@ -453,6 +551,7 @@
 
   function renderPanel() {
     if (!panelEl || !panelEl.isConnected) return;
+    syncTheme();
 
     const input = panelEl.querySelector('#rbx-p-input');
     if (document.activeElement !== input) input.value = state.balance;
@@ -481,7 +580,9 @@
 
   function mountPanel() {
     if (!document.body) return;
-    if (!panelForced && !isSettingsPage()) {
+
+    const voulu = panelForced || (isSettingsPage() && !panelClosed);
+    if (!voulu) {
       if (panelEl && panelEl.isConnected) panelEl.remove();
       return;
     }
@@ -514,18 +615,24 @@
     const orig = history[m];
     history[m] = function () {
       const r = orig.apply(this, arguments);
-      setTimeout(mountPanel, 0);
+      setTimeout(renavigate, 0);
       return r;
     };
   }
-  window.addEventListener('popstate', () => setTimeout(mountPanel, 0));
-  window.addEventListener('hashchange', () => setTimeout(mountPanel, 0));
+  window.addEventListener('popstate', () => setTimeout(renavigate, 0));
+  window.addEventListener('hashchange', () => setTimeout(renavigate, 0));
+
+  function renavigate() {
+    panelClosed = false;
+    mountPanel();
+  }
 
   // ---------- 5. BOUCLE D'ENTRETIEN ----------
   const tick = () => {
     injectBanner();
     paintBalance();
     mountPanel();
+    syncTheme();
   };
 
   const obs = new MutationObserver(tick);
@@ -545,6 +652,6 @@
     state,
     reset() { localStorage.removeItem(STORAGE_KEY); location.reload(); },
     setBalance(n) { state.balance = Math.max(0, Number(n) || 0); save(); paintBalance(); renderPanel(); },
-    panel() { panelForced = true; mountPanel(); }
+    panel() { panelForced = true; panelClosed = false; mountPanel(); }
   };
 })();
