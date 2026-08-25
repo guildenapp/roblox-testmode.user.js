@@ -14,6 +14,11 @@
 (function () {
   'use strict';
 
+  // Le chargeur peut exécuter ce code alors qu'il est déjà installé en direct :
+  // sans ce garde, fetch et XHR seraient interceptés deux fois.
+  if (window.__rbxTestModeLoaded) return;
+  window.__rbxTestModeLoaded = true;
+
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
   const STORAGE_KEY = 'rbx_testmode_state';
