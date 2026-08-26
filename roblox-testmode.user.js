@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.4
+// @version      1.5
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -360,6 +360,13 @@
   const BALANCE_NAMED = [
     '[id*="balance" i]', '[class*="balance" i]', '[data-testid*="balance" i]'
   ].join(', ');
+
+  // Le menu déroulant du solde. « role=dialog » en est volontairement exclu :
+  // la fenêtre d'achat en est une, et son montant central est un prix.
+  const MENU_ANCESTORS = [
+    '[role="menu"]', '.popover', '.dropdown-menu',
+    '[class*="popover" i]', '[class*="dropdown" i]'
+  ].join(', ');
   // Un nombre, éventuellement déjà abrégé (« 111M+ »), pour pouvoir le réécrire.
   const NUMERIC_RE = /^[\d.,\s  ]+(?:[KMB]\+?)?$/i;
 
@@ -373,7 +380,7 @@
   }
 
   function setText(el, txt) {
-    if (el.dataset.rbxFake === txt) return;
+    if (el.dataset.rbxFake === txt) return;   // déjà à jour, y compris au bon format
     el.textContent = txt;
     el.dataset.rbxFake = txt;
     el.classList.add('rbx-fake-value');
@@ -411,6 +418,15 @@
       const txt = box.closest(HEADER_ANCESTORS) ? court : complet;
       paintLeaf(box, txt);
       box.querySelectorAll('*').forEach(el => paintLeaf(el, txt));
+    });
+
+    // Le menu qui s'ouvre sous le solde affiche le montant entier, pas l'abrégé.
+    // La mention « Robux » dans le menu sert de garde-fou : sans elle, on ne
+    // touche à rien.
+    document.querySelectorAll(MENU_ANCESTORS).forEach(menu => {
+      if (menu.closest('#' + PANEL_ID)) return;
+      if (!/robux/i.test(menu.textContent || '')) return;
+      menu.querySelectorAll('*').forEach(el => paintLeaf(el, complet));
     });
   }
 
@@ -523,6 +539,16 @@
   // remplacé, il n'y a plus rien à trouver, donc aucune boucle avec l'observateur.
   const IDENT_SKIP = /^(SCRIPT|STYLE|TEXTAREA|INPUT|NOSCRIPT)$/;
 
+  const echapperRegex = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Un remplacement brut abîme tout ce qui contient le pseudo par hasard : avec
+  // un compte nommé « M », le solde « 1M+ » devenait « 1Azen+ ». On exige donc
+  // un bord de mot, au sens des caractères autorisés dans un pseudo Roblox.
+  function remplaceNom(texte, reel, faux) {
+    const re = new RegExp('(^|[^A-Za-z0-9_])' + echapperRegex(reel) + '(?![A-Za-z0-9_])', 'g');
+    return texte.replace(re, (m, avant) => avant + faux);
+  }
+
   function paintIdentity() {
     if (!spoofOn() || !state.me || !document.body) return;
     const sp = state.spoof;
@@ -543,13 +569,15 @@
       const parent = node.parentElement;
       if (!parent || IDENT_SKIP.test(parent.tagName)) continue;
       if (parent.closest('#' + PANEL_ID)) continue;
+      // Ne jamais repasser sur un nombre qu'on vient d'écrire nous-mêmes.
+      if (parent.dataset.rbxFake !== undefined || parent.dataset.rbxCount !== undefined) continue;
       const txt = node.nodeValue;
       if (!txt || !pairs.some(([real]) => txt.includes(real))) continue;
       todo.push(node);
     }
     for (const n of todo) {
       let v = n.nodeValue;
-      for (const [real, faux] of pairs) v = v.split(real).join(faux);
+      for (const [real, faux] of pairs) v = remplaceNom(v, real, faux);
       n.nodeValue = v;
     }
 
@@ -655,25 +683,36 @@
     return null;
   }
 
-  // Les images rendues côté serveur ne passent pas par l'API vignettes :
-  // on les remplace dans les conteneurs d'avatar connus.
-  const AVATAR_SELECTORS = [
-    '.avatar-card-image img', '.profile-avatar img', '.avatar .avatar-card-image img',
-    '[class*="avatar" i] img', '[data-testid*="avatar" i] img'
+  // Les images rendues côté serveur ne passent pas par l'API vignettes. Mais
+  // « [class*=avatar] img » attrapait aussi les vignettes des amis, qui se
+  // retrouvaient tous avec la tête du profil emprunté : on se limite donc à
+  // l'en-tête et aux conteneurs qui désignent explicitement mon avatar.
+  const AVATAR_SCOPES = 'header, nav, #header, [class*="navbar" i], [data-testid*="header" i]';
+
+  const MY_AVATAR_SELECTORS = [
+    '#navbar-avatar img', '[data-testid*="user-avatar" i] img',
+    '.profile-avatar img', '.profile-header-thumbnail img',
+    '[class*="profile-header" i] img'
   ].join(', ');
 
   function swapAvatars(sp) {
     const url = sp.headshotUrl || sp.avatarUrl;
     if (!url) return;
-    document.querySelectorAll(AVATAR_SELECTORS).forEach(img => {
-      if (img.closest('#' + PANEL_ID)) return;
-      if (img.dataset.rbxAvatar === url) return;
+
+    const cibles = new Set();
+    document.querySelectorAll(AVATAR_SCOPES).forEach(zone =>
+      zone.querySelectorAll('img').forEach(img => cibles.add(img)));
+    document.querySelectorAll(MY_AVATAR_SELECTORS).forEach(img => cibles.add(img));
+
+    for (const img of cibles) {
+      if (img.closest('#' + PANEL_ID)) continue;
+      if (img.dataset.rbxAvatar === url) continue;
       // On ne touche qu'aux vignettes Roblox, jamais aux visuels de jeux.
-      if (!/rbxcdn\.com/.test(img.src || '')) return;
+      if (!/rbxcdn\.com/.test(img.src || '')) continue;
       img.dataset.rbxAvatar = url;
       img.src = url;
       img.srcset = '';
-    });
+    }
   }
 
   // ---------- 4. CACHE DES ARTICLES ----------
@@ -719,7 +758,14 @@
   // Un motif trop précis rate les endpoints d'achat que Roblox renomme, et la
   // requête part alors pour de vrai. Le tri repose donc sur la méthode — un
   // achat est toujours un POST — plutôt que sur une liste d'URL exactes.
-  const PURCHASE_RE = /purchase/i;
+  // L'URL doit se *terminer* par l'acte d'achat. Un simple « contient
+  // purchase » attrapait aussi la requête émise à l'ouverture de la fenêtre,
+  // d'où un achat déclenché avant même le clic sur le bouton bleu.
+  const PURCHASE_URL_RE =
+    /\/(?:purchase|purchase-item|buy)\/?(?:\?|$)|\/purchases\/products\/\d+\/?(?:\?|$)/i;
+
+  // À défaut, une URL qui parle d'achat dont le corps porte un prix.
+  const PURCHASE_BODY_RE = /(expectedPrice|collectibleItemId|expectedCurrency|expectedSellerId)/i;
 
   // Ces chemins-là contiennent « purchase » sans être des achats.
   const NOT_PURCHASE_RE = /(details|resellers|resale|history|eligib|can-purchase|purchasable)/i;
@@ -733,9 +779,13 @@
 
   // La méthode compte autant que l'URL : un GET ne peut pas être un achat, et
   // c'est ce qui protège l'affichage du marketplace.
-  const isPurchase = (url, method) =>
-    state.enabled && String(method).toUpperCase() === 'POST' &&
-    PURCHASE_RE.test(url) && !NOT_PURCHASE_RE.test(url);
+  function isPurchase(url, method, body) {
+    if (!state.enabled) return false;
+    if (String(method).toUpperCase() !== 'POST') return false;
+    if (NOT_PURCHASE_RE.test(url)) return false;
+    if (PURCHASE_URL_RE.test(url)) return true;
+    return /purchase/i.test(url) && PURCHASE_BODY_RE.test(String(body || ''));
+  }
 
   // Sans console sur iPad, ce journal est le seul moyen de voir quelle requête
   // Roblox envoie vraiment au moment d'un achat. Il est conservé d'un
@@ -749,6 +799,13 @@
     renderPanel();
   }
   const isCurrency = (url) => state.enabled && CURRENCY_PATTERNS.some(re => re.test(url));
+
+  // Filtre d'entrée bon marché, appliqué avant toute lecture de corps.
+  function mightTransform(url) {
+    if (!state.enabled) return false;
+    if (!/roblox\.com/.test(url)) return false;
+    return INTERESTING.test(url) || IS_OWNED_RE.test(url);
+  }
 
   // Toute réponse JSON qui nous intéresse passe ici, quel que soit le transport.
   const INTERESTING =
@@ -1096,7 +1153,7 @@
     const url = typeof input === 'string' ? input : (input && input.url) || '';
     const method = String((init && init.method) || (input && input.method) || 'GET');
 
-    const achat = isPurchase(url, method);
+    const achat = isPurchase(url, method, init && init.body);
     logRequest(url, method, achat);
 
     if (achat) {
@@ -1112,6 +1169,10 @@
       : [typeof input === 'string' ? cible : new Request(cible, input), init];
 
     const res = await origFetch.apply(this, args);
+
+    // Lire le corps de *chaque* réponse coûte cher — c'est ce qui ralentissait
+    // le marketplace. On ne clone que ce qu'on est susceptible de réécrire.
+    if (!mightTransform(cible)) return res;
 
     try {
       const text = await res.clone().text();
@@ -1139,6 +1200,7 @@
     // qui n'assigne ses handlers qu'entre open() et send().
     this.addEventListener('readystatechange', () => {
       if (this.readyState !== 4 || this.status !== 200) return;
+      if (!mightTransform(this.__rbxUrl)) return;
       if (this.responseType && this.responseType !== 'text' && this.responseType !== 'json') return;
       try {
         const raw = this.responseText;
@@ -1159,7 +1221,7 @@
   XHR.prototype.send = function (body) {
     const url = this.__rbxUrl || '';
 
-    const achat = isPurchase(url, this.__rbxMethod);
+    const achat = isPurchase(url, this.__rbxMethod, body);
     logRequest(url, this.__rbxMethod, achat);
 
     if (achat) {
@@ -1251,19 +1313,27 @@
   function ownedBadge() {
     if (document.querySelector('.rbx-tm-owned-badge')) return;
 
+    const candidats = [];
     for (const el of document.querySelectorAll('span, div, p, a, h2')) {
       if (el.closest('#' + PANEL_ID)) continue;
       const texte = normalise(el.textContent);
       if (texte.length > 60 || !CREATOR_RE.test(texte)) continue;
+      if (!el.offsetParent) continue;                    // masqué : le badge y serait invisible
       // On veut la ligne elle-même, pas un conteneur qui l'englobe.
-      if (el.querySelector('span, div, p, a, h2') &&
-          Array.prototype.some.call(el.querySelectorAll('span, div, p, a, h2'),
+      if (Array.prototype.some.call(el.querySelectorAll('span, div, p, a, h2'),
             e => CREATOR_RE.test(normalise(e.textContent)))) continue;
-
-      el.insertAdjacentHTML('beforeend',
-        '<span class="rbx-tm-owned-badge">' + CHECK_ICON + '<span>Item Owned</span></span>');
-      return;
+      candidats.push(el);
     }
+    if (!candidats.length) return;
+
+    // Une ligne « By … » peut exister ailleurs dans la page ; celle de
+    // l'article est la première qui suit son titre.
+    const titre = document.querySelector('h1');
+    const choisi = (titre && candidats.find(el =>
+      titre.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) || candidats[0];
+
+    choisi.insertAdjacentHTML('beforeend',
+      '<span class="rbx-tm-owned-badge">' + CHECK_ICON + '<span>Item Owned</span></span>');
   }
 
   // La zone d'achat cède la place à « This item is available in your inventory. »
@@ -1656,7 +1726,14 @@
     syncTheme();
   };
 
-  const obs = new MutationObserver(tick);
+  // React remanie le DOM en continu : réagir à chaque mutation faisait tourner
+  // toute la boucle des dizaines de fois par seconde sur une page chargée,
+  // comme le marketplace. On regroupe les mutations sur un court délai.
+  let enAttente = 0;
+  const obs = new MutationObserver(() => {
+    if (enAttente) return;
+    enAttente = setTimeout(() => { enAttente = 0; tick(); }, 250);
+  });
 
   function start() {
     ensureMe().then(() => { renderPanel(); paintIdentity(); });
