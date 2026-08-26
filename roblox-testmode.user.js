@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.5
+// @version      1.6
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -30,6 +30,7 @@
     owned: [],
     enabled: true,
     reloadAfterPurchase: true,
+    wearing: [],    // articles simulés actuellement portés
     netLog: [],     // dernières requêtes POST vers Roblox, pour diagnostic
     me: null,       // vrai compte connecté : { id, name, displayName }
     spoof: null     // identité empruntée : { id, name, displayName, hasVerifiedBadge, ... }
@@ -42,6 +43,7 @@
       const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
       const s = Object.assign({}, DEFAULTS, raw);
       if (!Array.isArray(s.owned)) s.owned = [];
+      if (!Array.isArray(s.wearing)) s.wearing = [];
       return s;
     } catch {
       return Object.assign({}, DEFAULTS, { owned: [] });
@@ -244,6 +246,12 @@
         font-size: 13px; font-weight: 600; line-height: 1.3;
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
       }
+      #${PANEL_ID} .rbx-tm-item .rbx-tm-wear {
+        width: 100%; margin-top: 6px; padding: 6px 8px; font-size: 12px;
+        font-weight: 600; border: 0; border-radius: 6px; cursor: pointer;
+        background: var(--rbx-subtle); color: var(--rbx-text);
+      }
+      #${PANEL_ID} .rbx-tm-item .rbx-tm-wear.rbx-tm-on { background: var(--rbx-blue); color: #fff; }
       #${PANEL_ID} .rbx-tm-item .rbx-tm-item-price {
         display: flex; align-items: center; gap: 4px;
         font-size: 13px; font-weight: 700; margin-top: 4px;
@@ -596,6 +604,10 @@
 
   const normalise = (t) => String(t || '').replace(/\s+/g, ' ').trim();
 
+  // offsetParent vaut null pour tout élément en « position: fixed » — donc
+  // pour les fenêtres modales, justement celles qu'on cherche.
+  const estVisible = (el) => !!(el && el.getClientRects().length);
+
   function injectVerified(sp) {
     if (!sp.hasVerifiedBadge) return;
     document.querySelectorAll(NAME_HEADINGS).forEach(el => {
@@ -866,6 +878,9 @@
     // -- inventaire --
     if (injectInventory(url, data)) touched = true;
 
+    // -- tenue portée --
+    if (injectWearing(url, data)) touched = true;
+
     return touched ? JSON.stringify(data) : text;
   }
 
@@ -1083,17 +1098,29 @@
 
   function applyPurchase(url, body, fallbackPrice) {
     const item = resolveItem(url, body, fallbackPrice);
+    recordPurchase(item);
+    if (state.reloadAfterPurchase) scheduleReload(url);
+    return item;
+  }
 
+  function recordPurchase(item) {
     state.balance = Math.max(0, state.balance - item.price);
     if (!item.assetId || !ownsAsset(item.assetId)) state.owned.push(item);
     save();
     paintBalance();
     renderPanel();
-
     console.log('[TEST MODE] simulated purchase', item);
-
-    if (state.reloadAfterPurchase) scheduleReload(url);
     return item;
+  }
+
+  const isWorn = (assetId) => state.wearing.some(id => String(id) === String(assetId));
+
+  function toggleWear(assetId, porter) {
+    const id = String(assetId);
+    state.wearing = state.wearing.filter(x => String(x) !== id);
+    if (porter) state.wearing.push(id);
+    save();
+    renderPanel();
   }
 
   // Si un jour un endpoint est pris à tort pour un achat, ce garde-fou évite
@@ -1119,6 +1146,66 @@
   // trop est sans effet ; un champ manquant fait lever une exception au script
   // de Roblox, qui laisse alors sa fenêtre modale ouverte et la page bloquée.
   // On renvoie donc la réunion des deux formats.
+  // Roblox ignore l'existence de nos articles : lui demander de les porter
+  // renverrait une erreur. On répond nous-mêmes pour ceux-là, et on laisse
+  // passer les vrais, pour que l'avatar réel continue de fonctionner.
+  const WEAR_RE = /avatar\.roblox\.com\/v\d+\/avatar\/assets\/(\d+)\/(wear|remove)\b/i;
+  const SET_WEARING_RE = /avatar\.roblox\.com\/v\d+\/avatar\/set-wearing-assets\b/i;
+
+  function handleWear(url, method) {
+    if (!state.enabled || String(method).toUpperCase() !== 'POST') return null;
+    const m = url.match(WEAR_RE);
+    if (!m || !ownsAsset(m[1])) return null;      // article réel : on ne s'en mêle pas
+    toggleWear(m[1], m[2].toLowerCase() === 'wear');
+    return JSON.stringify({ success: true, invalidAssetIds: [], testMode: true });
+  }
+
+  // « set-wearing-assets » envoie la tenue complète. On en retire nos articles
+  // avant de laisser partir la requête, sinon Roblox rejetterait l'ensemble.
+  function splitWearing(url, method, body) {
+    if (!state.enabled || String(method).toUpperCase() !== 'POST') return null;
+    if (!SET_WEARING_RE.test(url)) return null;
+
+    let data;
+    try { data = JSON.parse(body); } catch { return null; }
+    if (!data || !Array.isArray(data.assetIds)) return null;
+
+    const miens = data.assetIds.filter(id => ownsAsset(id)).map(String);
+    const vrais = data.assetIds.filter(id => !ownsAsset(id));
+    if (!miens.length) return null;
+
+    state.wearing = miens;
+    save();
+    renderPanel();
+
+    return JSON.stringify(Object.assign({}, data, { assetIds: vrais }));
+  }
+
+  // Les articles simulés portés sont ajoutés à la tenue que renvoie Roblox.
+  function injectWearing(url, data) {
+    if (!/avatar\.roblox\.com\/v\d+\/(?:users\/\d+\/)?avatar\b/.test(url)) return false;
+    if (!Array.isArray(data.assets)) return false;
+
+    const portes = state.owned.filter(it => it.assetId && isWorn(it.assetId));
+    if (!portes.length) return false;
+
+    const modele = data.assets[0] || null;
+    const deja = new Set(data.assets.map(a => String(a.id)));
+    let touched = false;
+
+    for (const it of portes) {
+      if (deja.has(String(it.assetId))) continue;
+      const e = modele ? JSON.parse(JSON.stringify(modele)) : {};
+      e.id = Number(it.assetId) || it.assetId;
+      e.name = it.name;
+      if (e.assetType && typeof e.assetType === 'object') e.assetType.id = it.assetType;
+      else e.assetType = { id: it.assetType, name: '' };
+      data.assets.push(e);
+      touched = true;
+    }
+    return touched;
+  }
+
   const purchaseResponseBody = (item) => JSON.stringify({
     purchased: true,
     reason: 'Success',
@@ -1152,6 +1239,14 @@
   window.fetch = async function (input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
     const method = String((init && init.method) || (input && input.method) || 'GET');
+
+    const tenue = handleWear(url, method);
+    if (tenue) {
+      return new Response(tenue, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    const corpsFiltre = splitWearing(url, method, init && init.body);
+    if (corpsFiltre) init = Object.assign({}, init, { body: corpsFiltre });
 
     const achat = isPurchase(url, method, init && init.body);
     logRequest(url, method, achat);
@@ -1221,6 +1316,15 @@
   XHR.prototype.send = function (body) {
     const url = this.__rbxUrl || '';
 
+    const tenue = handleWear(url, this.__rbxMethod);
+    if (tenue) {
+      fakeXhrResponse(this, tenue);
+      return;
+    }
+
+    const corpsFiltre = splitWearing(url, this.__rbxMethod, body);
+    if (corpsFiltre) body = corpsFiltre;
+
     const achat = isPurchase(url, this.__rbxMethod, body);
     logRequest(url, this.__rbxMethod, achat);
 
@@ -1231,7 +1335,9 @@
       return;
     }
 
-    return origSend.apply(this, arguments);
+    // .apply(arguments) enverrait le corps d'origine : en mode strict,
+    // « arguments » n'est plus lié aux paramètres nommés.
+    return origSend.call(this, body);
   };
 
   function fakeXhrResponse(xhr, payload) {
@@ -1318,7 +1424,7 @@
       if (el.closest('#' + PANEL_ID)) continue;
       const texte = normalise(el.textContent);
       if (texte.length > 60 || !CREATOR_RE.test(texte)) continue;
-      if (!el.offsetParent) continue;                    // masqué : le badge y serait invisible
+      if (!estVisible(el)) continue;                     // masqué : le badge y serait invisible
       // On veut la ligne elle-même, pas un conteneur qui l'englobe.
       if (Array.prototype.some.call(el.querySelectorAll('span, div, p, a, h2'),
             e => CREATOR_RE.test(normalise(e.textContent)))) continue;
@@ -1361,6 +1467,55 @@
 
     const ancre = boutons[0];
     ancre.parentElement.insertBefore(bloc, ancre);
+  }
+
+  // ---------- 6 ter. FENÊTRE DE VÉRIFICATION EN DEUX ÉTAPES ----------
+  // Les deux réponses possibles bloquent : « non configurée » fait afficher
+  // « configure-la d'abord », « configurée » fait réclamer un code. Comme
+  // aucune requête ne part vers Roblox, ce code ne validerait rien de toute
+  // façon. On conclut donc l'achat nous-mêmes et on referme la fenêtre.
+  //
+  // Restreint aux pages d'article : ailleurs, cette fenêtre protège de vraies
+  // opérations sur le compte et doit être laissée intacte.
+  const TWOSTEP_RE =
+    /(2-step verification|two-step verification|vérification en 2 étapes|6-digit code|code à 6 chiffres)/i;
+
+  const MODAL_SELECTORS = '[role="dialog"], .modal-content, .modal-dialog, [class*="modal" i]';
+
+  function bypassTwoStep() {
+    if (!state.enabled) return;
+    const surLaPage = location.pathname.match(ITEM_PAGE_RE);
+    if (!surLaPage) return;
+
+    let modale = null;
+    for (const el of document.querySelectorAll(MODAL_SELECTORS)) {
+      if (el.dataset.rbxTwoStep || el.closest('#' + PANEL_ID) || !estVisible(el)) continue;
+      if (!TWOSTEP_RE.test(normalise(el.textContent))) continue;
+      modale = el;
+      break;
+    }
+    if (!modale) return;
+    modale.dataset.rbxTwoStep = '1';
+
+    console.log('[TEST MODE] 2-step prompt bypassed, completing the simulated purchase');
+
+    // L'article de la page suffit : le prix vient du cache rempli en naviguant.
+    const item = resolveItem(location.pathname, null, 0);
+    if (!ownsAsset(item.assetId)) recordPurchase(item);
+
+    fermerModale(modale);
+    if (state.reloadAfterPurchase) scheduleReload('twostep:' + surLaPage[1]);
+  }
+
+  function fermerModale(modale) {
+    // On ne clique aucun bouton : « Verify » partirait vers Roblox. On retire
+    // la fenêtre et le voile qui bloque les clics.
+    const voile = modale.closest('[class*="overlay" i], [class*="backdrop" i]') || modale;
+    voile.remove();
+    document.querySelectorAll('[class*="backdrop" i], [class*="overlay" i]').forEach(el => {
+      if (estVisible(el) && !el.querySelector('#' + PANEL_ID)) el.remove();
+    });
+    document.body.style.overflow = '';
   }
 
   // ---------- 7. PANNEAU ----------
@@ -1518,6 +1673,10 @@
         return;
       }
       if (btn.dataset.act === 'lookup') { doLookup(); return; }
+      if (btn.dataset.wear) {
+        toggleWear(btn.dataset.wear, !isWorn(btn.dataset.wear));
+        return;
+      }
 
       if (btn.dataset.add) {
         state.balance = Math.max(0, state.balance + Number(btn.dataset.add));
@@ -1628,6 +1787,9 @@
         '<div class="rbx-tm-item-body">' +
           '<div class="rbx-tm-item-name">' + esc(it.name || 'Simulated item') + '</div>' +
           '<div class="rbx-tm-item-price">' + ROBUX_ICON + fmt(it.price) + '</div>' +
+          '<button type="button" class="rbx-tm-wear' + (isWorn(it.assetId) ? ' rbx-tm-on' : '') +
+            '" data-wear="' + esc(it.assetId) + '">' +
+            (isWorn(it.assetId) ? 'Worn' : 'Wear') + '</button>' +
         '</div>' +
       '</div>'
     ).join('');
@@ -1722,6 +1884,7 @@
     paintIdentity();
     paintInventory();
     paintOwned();
+    bypassTwoStep();
     mountPanel();
     syncTheme();
   };
