@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.3
+// @version      1.4
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -51,7 +51,7 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* quota */ }
   }
 
-  const fmt = (n) => Number(n || 0).toLocaleString('fr-FR');
+  const fmt = (n) => Number(n || 0).toLocaleString('en-US');
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -69,8 +69,13 @@
     '<path fill="currentColor" fill-rule="evenodd" d="M12 1.5 21.09 6.75v10.5L12 22.5 2.91 17.25V6.75L12 1.5Z' +
     'M12 7 7.67 9.5v5L12 17l4.33-2.5v-5L12 7Z"/></svg>';
 
+  const CHECK_ICON =
+    '<svg class="rbx-tm-check" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<circle cx="12" cy="12" r="10" fill="#00b06f"/>' +
+    '<path fill="#fff" d="m10.6 16.2-4-4 1.4-1.4 2.6 2.6 5.4-5.4 1.4 1.4z"/></svg>';
+
   const VERIFIED_ICON =
-    '<svg class="rbx-tm-verified" viewBox="0 0 24 24" aria-label="Compte vérifié">' +
+    '<svg class="rbx-tm-verified" viewBox="0 0 24 24" aria-label="Verified account">' +
     '<circle cx="12" cy="12" r="10" fill="#0066ff"/>' +
     '<path fill="#fff" d="m10.6 16.2-4-4 1.4-1.4 2.6 2.6 5.4-5.4 1.4 1.4z"/></svg>';
 
@@ -285,6 +290,25 @@
       }
       /* La règle de taille du panneau ne porte pas jusqu'ici. */
       .rbx-tm-inv-card .rbx-tm-icon { width: 14px; height: 14px; flex: none; }
+      /* État « possédé » reproduit sur la page d'un article. */
+      #rbx-tm-owned { margin: 12px 0 20px; }
+      #rbx-tm-owned .rbx-tm-owned-row {
+        display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+      }
+      #rbx-tm-owned .rbx-tm-owned-text { flex: 1 1 220px; font-size: 16px; }
+      .rbx-tm-owned-btn {
+        display: inline-block; border: 0; cursor: pointer;
+        background: #f2f4f5; color: #1b1d1f;
+        padding: 10px 22px; border-radius: 8px;
+        font: inherit; font-size: 15px; font-weight: 600; text-decoration: none;
+      }
+      body.dark-theme .rbx-tm-owned-btn { background: #393b3d; color: #fff; }
+      .rbx-tm-owned-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        margin-left: 12px; font-weight: 600; font-size: 16px;
+      }
+      .rbx-tm-check { width: 20px; height: 20px; flex: none; }
+
       /* Badge de certification injecté dans la page, hors panneau. */
       .rbx-tm-verified {
         width: .85em; height: .85em; display: inline-block; vertical-align: -.08em;
@@ -298,7 +322,7 @@
     if (!document.body) return;
     const d = document.createElement('div');
     d.id = BANNER_ID;
-    d.textContent = 'TEST MODE — données simulées, aucun achat réel';
+    d.textContent = 'TEST MODE — SIMULATED DATA, NO REAL PURCHASES';
     document.body.appendChild(d);
   }
 
@@ -353,7 +377,7 @@
     el.textContent = txt;
     el.dataset.rbxFake = txt;
     el.classList.add('rbx-fake-value');
-    el.title = 'Solde simulé — mode test';
+    el.title = 'Simulated balance — test mode';
   }
 
   function paintLeaf(el, txt) {
@@ -410,16 +434,16 @@
 
   // Recherche le profil public réel d'un pseudo, tel que Roblox l'expose.
   async function lookupUser(username) {
-    if (!origFetch) throw new Error('réseau indisponible');
+    if (!origFetch) throw new Error('network unavailable');
 
     const r = await origFetch('https://users.roblox.com/v1/usernames/users', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
     });
-    if (!r.ok) throw new Error('recherche impossible (HTTP ' + r.status + ')');
+    if (!r.ok) throw new Error('lookup failed (HTTP ' + r.status + ')');
     const found = (await r.json()).data || [];
-    if (!found.length) throw new Error('aucun compte nommé « ' + username + ' »');
+    if (!found.length) throw new Error('no account named \u201c' + username + '\u201d');
 
     const id = found[0].id;
     const [detail, headshot, avatar, friends, followers, followings] = await Promise.all([
@@ -583,7 +607,7 @@
     if (el.dataset.rbxCount === txt) return;
     el.textContent = txt;
     el.dataset.rbxCount = txt;
-    el.title = 'Compteur du profil emprunté — mode test';
+    el.title = 'Borrowed profile counter — test mode';
   }
 
   function paintCounts(sp) {
@@ -986,7 +1010,7 @@
       itemType: meta ? meta.itemType : 'Asset',
       productId: (meta && meta.productId) || (p ? Number(p[1]) : null),
       collectibleItemId: (meta && meta.collectibleItemId) || (c ? c[1] : null),
-      name: (meta && meta.name) || pageItemName() || 'Article simulé',
+      name: (meta && meta.name) || pageItemName() || 'Simulated item',
       creatorName: (meta && meta.creatorName) || '',
       thumb: (meta && meta.thumb) || '',
       price,
@@ -1009,7 +1033,7 @@
     paintBalance();
     renderPanel();
 
-    console.log('[TEST MODE] achat simulé', item);
+    console.log('[TEST MODE] simulated purchase', item);
 
     if (state.reloadAfterPurchase) scheduleReload(url);
     return item;
@@ -1024,7 +1048,7 @@
       const cle = 'rbx_last_reload';
       const [urlPrec, tPrec] = String(sessionStorage.getItem(cle) || '|0').split('|');
       if (urlPrec === url && Date.now() - Number(tPrec) < 8000) {
-        console.warn('[TEST MODE] rechargement ignoré : même requête il y a moins de 8 s');
+        console.warn('[TEST MODE] reload skipped: same request less than 8 s ago');
         return;
       }
       sessionStorage.setItem(cle, url + '|' + Date.now());
@@ -1193,7 +1217,7 @@
       const card = document.createElement('div');
       card.className = 'rbx-tm-inv-card';
       card.dataset.rbxItem = key;
-      card.title = 'Article simulé — mode test';
+      card.title = 'Simulated item — test mode';
       card.innerHTML =
         (it.thumb ? '<img src="' + esc(it.thumb) + '" alt="" />' : '<img alt="" />') +
         '<div class="rbx-tm-inv-body">' +
@@ -1210,36 +1234,63 @@
   // puisque la page se recharge.
   const ITEM_PAGE_RE = /\/(?:catalog|bundles|library)\/(\d+)/;
 
-  const BUY_BUTTONS = [
-    '#item-container button', '#item-container a',
-    '.item-details button', '.PurchaseButton', '[data-testid*="purchase" i]',
-    'button.btn-growth-lg', 'a.btn-growth-lg', '[class*="purchase" i] button'
-  ].join(', ');
-
   // On ne se fie pas à une classe : le libellé du bouton est plus stable.
-  const BUY_TEXT_RE = /^(acheter|buy|get|obtenir)\b/i;
+  const ACTION_TEXT_RE = /^(buy|get|add to cart|acheter|obtenir|ajouter au panier)\b/i;
+  const CREATOR_RE = /^(by|par)\s+.{1,40}$/i;
 
   function paintOwned() {
     if (!state.enabled || !document.body) return;
     const surLaPage = location.pathname.match(ITEM_PAGE_RE);
     if (!surLaPage || !ownsAsset(surLaPage[1])) return;
 
-    document.querySelectorAll(BUY_BUTTONS).forEach(btn => {
-      if (btn.dataset.rbxOwned || btn.closest('#' + PANEL_ID)) return;
-      const libelle = normalise(btn.textContent);
-      if (!BUY_TEXT_RE.test(libelle)) return;
+    ownedBadge();
+    ownedArea();
+  }
 
-      // La langue du bouton donne celle de la page, sans avoir à la deviner.
-      const enFrancais = /^(acheter|obtenir)/i.test(libelle);
+  // « ✔ Item Owned » à côté de la ligne du créateur, comme sur le vrai site.
+  function ownedBadge() {
+    if (document.querySelector('.rbx-tm-owned-badge')) return;
 
-      btn.dataset.rbxOwned = '1';
-      btn.textContent = enFrancais ? 'Possédé' : 'Owned';
-      btn.title = 'Article acquis en mode test';
-      btn.setAttribute('aria-disabled', 'true');
-      if ('disabled' in btn) btn.disabled = true;
-      btn.style.pointerEvents = 'none';
-      btn.style.opacity = '.65';
-    });
+    for (const el of document.querySelectorAll('span, div, p, a, h2')) {
+      if (el.closest('#' + PANEL_ID)) continue;
+      const texte = normalise(el.textContent);
+      if (texte.length > 60 || !CREATOR_RE.test(texte)) continue;
+      // On veut la ligne elle-même, pas un conteneur qui l'englobe.
+      if (el.querySelector('span, div, p, a, h2') &&
+          Array.prototype.some.call(el.querySelectorAll('span, div, p, a, h2'),
+            e => CREATOR_RE.test(normalise(e.textContent)))) continue;
+
+      el.insertAdjacentHTML('beforeend',
+        '<span class="rbx-tm-owned-badge">' + CHECK_ICON + '<span>Item Owned</span></span>');
+      return;
+    }
+  }
+
+  // La zone d'achat cède la place à « This item is available in your inventory. »
+  function ownedArea() {
+    if (document.getElementById('rbx-tm-owned')) return;
+
+    const boutons = Array.prototype.filter.call(
+      document.querySelectorAll('button, a[role="button"], [data-testid*="purchase" i]'),
+      el => !el.closest('#' + PANEL_ID) && ACTION_TEXT_RE.test(normalise(el.textContent)));
+    if (!boutons.length) return;
+
+    for (const b of boutons) b.style.display = 'none';
+
+    const inventaire = state.me
+      ? 'https://www.roblox.com/users/' + state.me.id + '/inventory'
+      : 'https://www.roblox.com/my/inventory';
+
+    const bloc = document.createElement('div');
+    bloc.id = 'rbx-tm-owned';
+    bloc.innerHTML =
+      '<div class="rbx-tm-owned-row">' +
+        '<span class="rbx-tm-owned-text">This item is available in your inventory.</span>' +
+        '<a class="rbx-tm-owned-btn" href="' + inventaire + '">Inventory</a>' +
+      '</div>';
+
+    const ancre = boutons[0];
+    ancre.parentElement.insertBefore(bloc, ancre);
   }
 
   // ---------- 7. PANNEAU ----------
@@ -1277,34 +1328,34 @@
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
           <h2>Robux</h2>
-          <span class="rbx-tm-badge">Mode test</span>
-          <button class="rbx-tm-close" type="button" title="Fermer">&times;</button>
+          <span class="rbx-tm-badge">Test mode</span>
+          <button class="rbx-tm-close" type="button" title="Close">&times;</button>
         </div>
-        <p class="rbx-tm-sub">Solde simulé, visible uniquement dans ce navigateur.</p>
+        <p class="rbx-tm-sub">Simulated balance, visible only in this browser.</p>
 
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Solde actuel</span>
+          <span class="rbx-tm-label">Current balance</span>
           <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="current">0</span></span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Modifier</span>
+          <span class="rbx-tm-label">Set balance</span>
           <span class="rbx-tm-grow">
             <input class="rbx-tm-input" id="rbx-p-input" type="number" min="0" step="1" inputmode="numeric" />
-            <button class="rbx-tm-btn rbx-tm-primary" data-act="apply" type="button">Appliquer</button>
+            <button class="rbx-tm-btn rbx-tm-primary" data-act="apply" type="button">Apply</button>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Ajouter</span>
+          <span class="rbx-tm-label">Add</span>
           <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-add="1000" type="button">+1 000</button>
-            <button class="rbx-tm-btn" data-add="10000" type="button">+10 000</button>
-            <button class="rbx-tm-btn" data-add="100000" type="button">+100 000</button>
-            <button class="rbx-tm-btn" data-add="1000000" type="button">+1 000 000</button>
-            <button class="rbx-tm-btn" data-act="zero" type="button">Mettre à 0</button>
+            <button class="rbx-tm-btn" data-add="1000" type="button">+1,000</button>
+            <button class="rbx-tm-btn" data-add="10000" type="button">+10,000</button>
+            <button class="rbx-tm-btn" data-add="100000" type="button">+100,000</button>
+            <button class="rbx-tm-btn" data-add="1000000" type="button">+1,000,000</button>
+            <button class="rbx-tm-btn" data-act="zero" type="button">Set to 0</button>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Mode test actif</span>
+          <span class="rbx-tm-label">Test mode active</span>
           <span class="rbx-tm-right">
             <label class="rbx-tm-switch"><input type="checkbox" data-act="enabled" /><i></i></label>
           </span>
@@ -1313,74 +1364,74 @@
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Identité</h2>
-          <span class="rbx-tm-badge">Mode test</span>
+          <h2>Identity</h2>
+          <span class="rbx-tm-badge">Test mode</span>
         </div>
-        <p class="rbx-tm-sub">Emprunte l'apparence d'un profil public réel : nom, pseudo, avatar et certification.</p>
+        <p class="rbx-tm-sub">Borrow a real public profile: display name, username, avatar and verified badge.</p>
 
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Pseudo à chercher</span>
+          <span class="rbx-tm-label">Username</span>
           <span class="rbx-tm-grow">
             <input class="rbx-tm-input" id="rbx-p-user" type="text" autocapitalize="off"
-                   autocorrect="off" spellcheck="false" placeholder="ex. Azen" />
-            <button class="rbx-tm-btn rbx-tm-primary" data-act="lookup" type="button">Rechercher</button>
+                   autocorrect="off" spellcheck="false" placeholder="e.g. Azen" />
+            <button class="rbx-tm-btn rbx-tm-primary" data-act="lookup" type="button">Search</button>
           </span>
         </div>
         <div class="rbx-tm-row rbx-tm-block" data-role="ident"></div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Utiliser cette identité</span>
+          <span class="rbx-tm-label">Use this identity</span>
           <span class="rbx-tm-right">
             <label class="rbx-tm-switch"><input type="checkbox" data-act="spoof" /><i></i></label>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Mon vrai compte</span>
+          <span class="rbx-tm-label">My real account</span>
           <span class="rbx-tm-right" data-role="real">—</span>
         </div>
       </div>
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Inventaire simulé</h2>
+          <h2>Simulated inventory</h2>
           <span class="rbx-tm-badge rbx-tm-count" data-role="count">0</span>
         </div>
-        <p class="rbx-tm-sub">Les articles achetés en mode test, conservés et ajoutés à ton inventaire.</p>
+        <p class="rbx-tm-sub">Items bought in test mode, kept and added to your inventory.</p>
 
         <div class="rbx-tm-row rbx-tm-block rbx-tm-bare">
           <div class="rbx-tm-grid" data-role="inv"></div>
-          <p class="rbx-tm-empty" data-role="inv-empty">Aucun article pour l'instant.</p>
+          <p class="rbx-tm-empty" data-role="inv-empty">No items yet.</p>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Recharger la page après un achat</span>
+          <span class="rbx-tm-label">Reload the page after a purchase</span>
           <span class="rbx-tm-right">
             <label class="rbx-tm-switch"><input type="checkbox" data-act="reload" /><i></i></label>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Historique</span>
+          <span class="rbx-tm-label">History</span>
           <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-act="clear-inv" type="button">Vider l'inventaire</button>
-            <button class="rbx-tm-btn" data-act="reset" type="button">Tout réinitialiser</button>
+            <button class="rbx-tm-btn" data-act="clear-inv" type="button">Clear inventory</button>
+            <button class="rbx-tm-btn" data-act="reset" type="button">Reset everything</button>
           </span>
         </div>
-        <p class="rbx-tm-note">Local uniquement : rien n'est envoyé à Roblox, aucun Robux réel n'est débité ni crédité, aucun article n'est réellement acquis.</p>
+        <p class="rbx-tm-note">Local only: nothing is sent to Roblox, no real Robux is spent or credited, and no item is actually acquired.</p>
       </div>
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Journal réseau</h2>
+          <h2>Network log</h2>
           <span class="rbx-tm-badge rbx-tm-count" data-role="log-count">0</span>
         </div>
-        <p class="rbx-tm-sub">Les dernières requêtes POST envoyées à Roblox. Si un achat reste bloqué, c'est ici qu'on voit si sa requête a été reconnue ou laissée passer.</p>
+        <p class="rbx-tm-sub">The most recent POST requests sent to Roblox. If a purchase gets stuck, this shows whether its request was recognised or let through.</p>
 
         <div class="rbx-tm-row rbx-tm-block rbx-tm-bare">
           <ul class="rbx-tm-log" data-role="log"></ul>
-          <p class="rbx-tm-empty" data-role="log-empty">Aucune requête enregistrée.</p>
+          <p class="rbx-tm-empty" data-role="log-empty">No requests recorded.</p>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Journal</span>
+          <span class="rbx-tm-label">Log</span>
           <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-act="clear-log" type="button">Vider</button>
+            <button class="rbx-tm-btn" data-act="clear-log" type="button">Clear</button>
           </span>
         </div>
       </div>
@@ -1435,7 +1486,7 @@
         const on = e.target.checked;
         if (on && !lookupState.found && !state.spoof) {
           e.target.checked = false;
-          lookupState.error = 'Cherche d\'abord un pseudo.';
+          lookupState.error = 'Search for a username first.';
           renderPanel();
           return;
         }
@@ -1474,18 +1525,18 @@
       lookupState.error = '';
     } catch (err) {
       lookupState.found = null;
-      lookupState.error = err.message || 'recherche impossible';
+      lookupState.error = err.message || 'lookup failed';
     }
     lookupState.busy = false;
     renderPanel();
   }
 
   function identHtml() {
-    if (lookupState.busy) return '<p class="rbx-tm-empty">Recherche en cours…</p>';
+    if (lookupState.busy) return '<p class="rbx-tm-empty">Searching…</p>';
     if (lookupState.error) return '<p class="rbx-tm-error">' + esc(lookupState.error) + '</p>';
 
     const u = lookupState.found || (state.spoof && state.spoof.active ? state.spoof : null);
-    if (!u) return '<p class="rbx-tm-empty">Aucun profil chargé.</p>';
+    if (!u) return '<p class="rbx-tm-empty">No profile loaded.</p>';
 
     return '<div class="rbx-tm-ident">' +
       '<img src="' + esc(u.headshotUrl || u.avatarUrl) + '" alt="" />' +
@@ -1494,8 +1545,8 @@
           (u.hasVerifiedBadge ? VERIFIED_ICON : '') + '</div>' +
         '<div class="rbx-tm-ident-user">@' + esc(u.name) + ' · #' + esc(u.id) + '</div>' +
         '<div class="rbx-tm-ident-stats">' +
-          '<span><b>' + fmt(u.followerCount) + '</b> abonnés</span>' +
-          '<span><b>' + fmt(u.friendCount) + '</b> amis</span>' +
+          '<span><b>' + fmt(u.followerCount) + '</b> followers</span>' +
+          '<span><b>' + fmt(u.friendCount) + '</b> friends</span>' +
         '</div>' +
       '</div></div>';
   }
@@ -1505,7 +1556,7 @@
       '<div class="rbx-tm-item">' +
         (it.thumb ? '<img src="' + esc(it.thumb) + '" alt="" />' : '<img alt="" />') +
         '<div class="rbx-tm-item-body">' +
-          '<div class="rbx-tm-item-name">' + esc(it.name || 'Article simulé') + '</div>' +
+          '<div class="rbx-tm-item-name">' + esc(it.name || 'Simulated item') + '</div>' +
           '<div class="rbx-tm-item-price">' + ROBUX_ICON + fmt(it.price) + '</div>' +
         '</div>' +
       '</div>'
@@ -1529,13 +1580,13 @@
     q('[data-role="ident"]').innerHTML = identHtml();
     q('[data-role="real"]').textContent = state.me
       ? state.me.displayName + ' (@' + state.me.name + ')'
-      : 'non identifié';
+      : 'not identified';
 
     const journal = state.netLog || [];
     q('[data-role="log-count"]').textContent = journal.length;
     q('[data-role="log-empty"]').style.display = journal.length ? 'none' : '';
     q('[data-role="log"]').innerHTML = journal.slice().reverse().map(e =>
-      '<li><span class="rbx-tm-tag ' + (e.traite ? 'rbx-tm-yes">achat simulé' : 'rbx-tm-no">laissé passer') +
+      '<li><span class="rbx-tm-tag ' + (e.traite ? 'rbx-tm-yes">simulated buy' : 'rbx-tm-no">let through') +
       '</span><span>' + esc(e.u.replace(/^https:\/\//, '')) + '</span></li>'
     ).join('');
 

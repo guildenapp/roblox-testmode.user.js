@@ -1,109 +1,107 @@
 # Roblox TEST MODE
 
-Bac à sable **strictement local** pour roblox.com : faux solde de Robux, achats
-simulés, bandeau d'avertissement permanent et panneau de réglage dans les
-paramètres. Rien n'est envoyé à Roblox, aucun Robux réel n'est débité ni
-crédité, et aucun achat n'aboutit côté serveur — les requêtes d'achat sont
-court-circuitées avant de partir.
+A strictly **local** sandbox for roblox.com: fake Robux balance, simulated
+purchases kept in your inventory, and a borrowed public profile. Nothing is
+sent to Roblox, no real Robux is spent or credited, and no purchase reaches the
+server — purchase requests are short-circuited before they leave the browser.
 
-## Deux fichiers, deux usages
+## Two files, two ways to install
 
-| Fichier | À quoi il sert |
+| File | What it does |
 | --- | --- |
-| `roblox-testmode.user.js` | Le script complet. C'est lui qui fait tout le travail. |
-| `loader.user.js` | Un chargeur minuscule : il télécharge et exécute le script ci-dessus depuis GitHub. |
+| `roblox-testmode.user.js` | The full script. It does all the work. |
+| `loader.user.js` | A tiny loader: it downloads and runs the script above from GitHub. |
 
-### Installation simple (pas de mise à jour automatique)
+### Simple install (no automatic updates)
 
-Installe `roblox-testmode.user.js` dans ton extension de userscripts. À chaque
-modification du dépôt, il faut recopier le fichier à la main.
+Install `roblox-testmode.user.js` in your userscript extension. Every change to
+this repository then has to be copied over by hand.
 
-C'est le cas des extensions qui lisent un **fichier local** (Userscripts sur
-iOS/macOS, par exemple) : elles ne consultent jamais `@updateURL`, donc un
-changement sur GitHub ne les atteint pas.
+That is the case for extensions that read a **local file** (Userscripts on
+iOS/macOS, for example): they never look at `@updateURL`, so a change on GitHub
+does not reach them.
 
-### Installation avec mise à jour automatique
+### Install with automatic updates
 
-Installe **`loader.user.js` à la place**, une seule fois. Ce fichier local ne
-change plus jamais : à chaque chargement de roblox.com, il
+Install **`loader.user.js` instead**, once. That local file never changes
+again. On every roblox.com page load it:
 
-1. exécute immédiatement la dernière version qu'il a mise en cache (pas
-   d'attente réseau, indispensable pour intercepter les premiers appels de la
-   page) ;
-2. puis, au maximum une fois toutes les 6 h, retélécharge
-   `roblox-testmode.user.js` depuis `main` et le met en cache pour le prochain
-   rechargement.
+1. immediately runs the latest version it has cached — no waiting on the
+   network, which matters because the script has to intercept the page's first
+   requests;
+2. then, at most once every 6 hours, re-downloads `roblox-testmode.user.js`
+   from `main` and caches it for the next page load.
 
-Le cache vit dans le `localStorage` de roblox.com. Une réponse d'erreur de
-GitHub ne l'écrase jamais : en cas de panne réseau, la dernière version connue
-continue de tourner.
+The cache lives in roblox.com's `localStorage`. A GitHub error response never
+overwrites it: if the network fails, the last known good version keeps running.
 
-Pour vérifier que ça marche, ouvre la console : le chargeur y écrit
-`[TEST MODE / chargeur] code exécuté depuis …`.
+To check that it works, open the console: the loader logs
+`[TEST MODE / loader] ran code from …`.
 
-#### Si le chargeur ne parvient pas à exécuter le code
+#### If the loader cannot run the code
 
-Le chargeur utilise `new Function(code)`, soumis à la *Content Security Policy*
-de roblox.com. Si la console affiche une erreur de CSP à propos d'`eval`, cette
-méthode est inutilisable sur ce site et il faut passer par la solution
-suivante.
+The loader uses `new Function(code)`, which is subject to roblox.com's *Content
+Security Policy*. If the console shows a CSP error about `eval`, that route is
+unusable on this site and you need the fallback below.
 
-### Solution de repli : mettre à jour le fichier local lui-même
+### Fallback: replace the local file itself
 
-Sur iOS, l'extension Userscripts lit un dossier de l'app Fichiers (souvent dans
-iCloud Drive). Une automatisation Raccourcis peut donc remplacer le fichier
-sans toucher au navigateur :
+On iOS, the Userscripts extension reads a folder in the Files app (often in
+iCloud Drive). A Shortcuts automation can replace the file without touching the
+browser:
 
-1. **Raccourcis → nouveau raccourci**
-2. *Obtenir le contenu de l'URL* →
+1. **Shortcuts → new shortcut**
+2. *Get contents of URL* →
    `https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js`
-3. *Enregistrer le fichier* → choisir le dossier des userscripts,
-   **désactiver** « Demander où enregistrer » et **activer** « Écraser si le
-   fichier existe »
-4. Onglet **Automatisation** → *Heure de la journée* → une fois par jour →
-   exécuter ce raccourci
+3. *Save File* → pick the userscripts folder, turn **off** "Ask Where To Save"
+   and turn **on** "Overwrite If File Exists"
+4. **Automation** tab → *Time of Day* → once a day → run this shortcut
 
-Aucune CSP, aucun `eval` : l'extension recharge simplement un fichier local qui
-a changé.
+No CSP, no `eval`: the extension simply reloads a local file that changed.
 
-## Utilisation
+## What it does
 
-Le panneau s'ajoute en haut des pages **Paramètres** et **Inventaire**, aux
-couleurs du site. Il contient trois cartes.
+The panel is added to the top of the **Settings** and **Inventory** pages, in
+the site's own visual language. It holds four cards.
 
-**Robux** — fixe le solde simulé, ajoute des montants rapides, active ou coupe
-le mode test. Le solde de l'en-tête est réécrit, et les réponses de l'API
-économie sont réécrites elles aussi pour que le site affiche lui-même la valeur.
+**Robux** — set the simulated balance, add quick amounts, turn test mode on or
+off. The header balance is rewritten, and the economy API responses are
+rewritten too, so the site itself displays the value.
 
-**Identité** — cherche un pseudo sur le vrai Roblox et emprunte son profil.
-Plutôt que de maquiller les réponses, le script réécrit l'URL des requêtes de
-profil : le site demande alors à Roblox les données du compte emprunté et
-affiche ses vrais amis, abonnés, badges, groupes, favoris et créations. La liste
-des endpoints détournés est une liste blanche (`PROFILE_ENDPOINTS`) ; tout ce
-qui touche au compte réel — solde, paramètres, inventaire simulé — reste
-intact. L'identifiant numérique du compte connecté est conservé, sinon les
-propres appels du site casseraient.
+**Identity** — look up a username on the real Roblox and borrow that profile.
+Rather than faking the responses, the script rewrites the *URL* of profile
+requests: the site then asks Roblox for the borrowed account and shows its real
+friends, followers, badges, groups, favourites and creations. The set of
+redirected endpoints is a whitelist (`PROFILE_ENDPOINTS`); anything touching
+the real account — balance, settings, simulated inventory — is left alone. The
+numeric id of the signed-in account is kept, otherwise the site's own calls
+would break.
 
-Les compteurs de la page de profil sont rendus côté serveur : il n'y a pas de
-requête à détourner, ils sont donc réécrits directement dans la page, repérés
-par leur étiquette (« Amis », « Abonnés », « Abonnements ») et abrégés comme
-Roblox le fait (`191.9K`). Le badge de certification est injecté à côté du nom
-affiché.
+Profile counters are server-rendered, so there is no request to redirect: they
+are rewritten in the page instead, located by their label ("Friends",
+"Followers", "Following") and abbreviated the way Roblox does (`191.9K`). The
+verified badge is injected next to the display name.
 
-**Inventaire simulé** — les articles achetés en mode test sont conservés avec
-leur nom, leur prix et leur vignette réels, récupérés au passage sur les pages
-catalogue. Ils sont ajoutés aux réponses de l'API inventaire et à la grille de
-la page. Un interrupteur recharge la page après chaque achat, comme après un
-achat réel.
+**Simulated inventory** — items bought in test mode are kept with their real
+name, price and thumbnail, collected while browsing catalogue pages. They are
+added to the inventory API responses and to the page grid, `is-owned` answers
+true for them, and their item page shows Roblox's own owned state — a green
+check with "Item Owned" and a link to your inventory. A switch reloads the page
+after each purchase, the way a real purchase does.
 
-Depuis la console : `rbxTest.panel()` ouvre le panneau en flottant,
-`rbxTest.setBalance(n)` fixe le solde, `rbxTest.spoof('pseudo')` emprunte une
-identité, `rbxTest.unspoof()` la rend, `rbxTest.reset()` remet tout à zéro.
+**Network log** — the most recent POST requests sent to Roblox, each marked as
+recognised as a purchase or let through. This is the quickest way to diagnose a
+purchase that gets stuck, with no console needed.
 
-## Limites
+From the console: `rbxTest.panel()` opens the panel as a floating card,
+`rbxTest.setBalance(n)` sets the balance, `rbxTest.spoof('username')` borrows an
+identity, `rbxTest.unspoof()` gives it back, `rbxTest.reset()` clears
+everything.
 
-Rien ne quitte le navigateur : les achats sont interceptés avant l'envoi, et le
-serveur de Roblox ignore tout de ces articles et de ce solde. L'inventaire
-simulé disparaît sur un autre appareil, un autre navigateur ou après un vidage
-du stockage local. Le bandeau rouge est permanent et ne se masque pas sans
-éditer ce fichier.
+## Limits
+
+Nothing leaves the browser: purchases are intercepted before being sent, and
+Roblox's server knows nothing about these items or this balance. The simulated
+inventory disappears on another device, in another browser, or after clearing
+local storage. The red banner is permanent and cannot be hidden without editing
+the file.
