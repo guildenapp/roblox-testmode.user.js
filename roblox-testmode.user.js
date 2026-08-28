@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.8
+// @version      1.9
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -950,11 +950,16 @@
         state.me = { id: data.id, name: data.name, displayName: data.displayName };
         save();
       }
-      data.name = sp.name;
-      data.displayName = sp.displayName;
-      if ('hasVerifiedBadge' in data || sp.hasVerifiedBadge) data.hasVerifiedBadge = sp.hasVerifiedBadge;
-      if ('description' in data) data.description = sp.description || data.description;
-      touched = true;
+      // Une identité enregistrée par une ancienne version peut manquer de
+      // champs. Écrire un « undefined » faisait afficher « null » à la place
+      // du pseudo : on ne remplace que ce qu'on a vraiment.
+      if (sp.name) { data.name = sp.name; touched = true; }
+      if (sp.displayName) { data.displayName = sp.displayName; touched = true; }
+      if ('hasVerifiedBadge' in data || sp.hasVerifiedBadge) {
+        data.hasVerifiedBadge = !!sp.hasVerifiedBadge;
+        touched = true;
+      }
+      if ('description' in data && sp.description) data.description = sp.description;
     }
 
     // Vignettes d'avatar : on substitue l'image du profil emprunté.
@@ -973,9 +978,9 @@
     if (me && Array.isArray(data.data)) {
       for (const row of data.data) {
         if (row && String(row.id) === String(me.id)) {
-          row.name = sp.name;
-          row.displayName = sp.displayName;
-          row.hasVerifiedBadge = sp.hasVerifiedBadge;
+          if (sp.name) row.name = sp.name;
+          if (sp.displayName) row.displayName = sp.displayName;
+          row.hasVerifiedBadge = !!sp.hasVerifiedBadge;
           touched = true;
         }
       }
@@ -1437,8 +1442,16 @@
     const AN = 365 * 24 * 3600 * 1000;
     const entrees = [];
 
+    // Élever la fraction au carré rapproche la plupart des mouvements : une
+    // activité plus dense récemment, et « 30 derniers jours » qui a du contenu.
+    // Le facteur 0,95 garde la plus ancienne entrée en deçà de l'année, sinon
+    // elle tomberait pile sur la limite de la fenêtre et en sortirait.
     const quand = (fraction) =>
-      new Date(maintenant - Math.floor(fraction * AN)).toISOString();
+      new Date(maintenant - Math.floor(fraction * fraction * AN * 0.95)).toISOString();
+
+    // L'abonnement, lui, tombe vraiment tous les mois : pas de resserrement.
+    const quandMensuel = (mois) =>
+      new Date(maintenant - Math.floor((mois / 12) * AN * 0.95)).toISOString();
 
     // --- Dépenses : entre la moitié et 90 % du solde ---
     const cibleDepense = Math.round(solde * (0.5 + r() * 0.4));
@@ -1465,7 +1478,7 @@
     for (let mois = 1; mois <= 12 && credit < cibleCredit; mois++) {
       credit += 2200;
       entrees.push({
-        id: prochainId(), created: quand(mois / 12), kind: 'PremiumStipend',
+        id: prochainId(), created: quandMensuel(mois), kind: 'PremiumStipend',
         name: 'Premium Stipend', amount: 2200, agentName: 'Roblox', detailType: 'Currency'
       });
     }
@@ -1546,7 +1559,10 @@
   }
 
   function injectTransactions(url, data) {
-    if (!TRANSACTIONS_RE.test(url) || !Array.isArray(data.data)) return false;
+    const signature = Array.isArray(data.data) && 'nextPageCursor' in data &&
+                      /transaction/i.test(url);
+    if (!TRANSACTIONS_RE.test(url) && !signature) return false;
+    if (!Array.isArray(data.data)) return false;
     ensureLedger();
 
     const params = new URLSearchParams((url.split('?')[1] || ''));
@@ -1566,31 +1582,60 @@
     return true;
   }
 
+  // Deviner le nom exact de l'endpoint s'est révélé peu fiable : on reconnaît
+  // le résumé à sa forme. Tout objet portant ces totaux en est un.
+  function estResume(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+    return ['purchasesTotal', 'incomingRobuxTotal', 'outgoingRobuxTotal',
+            'salesTotal', 'currencyPurchasesTotal']
+      .some(cle => cle in data);
+  }
+
+  // La page propose une période ; les totaux doivent la respecter, sinon
+  // « 30 derniers jours » afficherait le total d'une année.
+  function fenetreJours(url) {
+    const m = /timeFrame=(\w+)/i.exec(url || '');
+    const t = m ? m[1].toLowerCase() : 'year';
+    if (t === 'day') return 1;
+    if (t === 'week') return 7;
+    if (t === 'month') return 30;
+    if (t === 'quarter') return 90;
+    return 365;
+  }
+
   function injectTotals(url, data) {
-    if (!TOTALS_RE.test(url)) return false;
+    if (!TOTALS_RE.test(url) && !estResume(data)) return false;
     ensureLedger();
 
-    const somme = (kinds, signe) => state.ledger
-      .filter(e => kinds.indexOf(e.kind) !== -1 && (signe > 0 ? e.amount > 0 : e.amount < 0))
-      .reduce((t, e) => t + e.amount, 0);
+    const depuis = Date.now() - fenetreJours(url) * 24 * 3600 * 1000;
+    const dans = state.ledger.filter(e => new Date(e.created).getTime() >= depuis);
+    const somme = (test) => dans.filter(test).reduce((t, e) => t + e.amount, 0);
 
-    const depenses = somme(['Purchase'], -1);
-    const achatsRobux = somme(['CurrencyPurchase'], 1);
-    const abonnement = somme(['PremiumStipend'], 1);
-    const versements = somme(['GroupPayout'], 1);
+    const depenses = somme(e => e.kind === 'Purchase');
+    const achatsRobux = somme(e => e.kind === 'CurrencyPurchase');
+    const abonnement = somme(e => e.kind === 'PremiumStipend');
+    const versements = somme(e => e.kind === 'GroupPayout');
+    const entrant = achatsRobux + abonnement + versements;
 
-    // On écrase les champs connus sans toucher aux autres : la forme exacte de
-    // cette réponse varie, et un champ inventé vaut mieux qu'un champ perdu.
-    Object.assign(data, {
-      salesTotal: 0,
-      purchasesTotal: depenses,
-      currencyPurchasesTotal: achatsRobux,
-      premiumStipendsTotal: abonnement,
-      groupPayoutsTotal: versements,
-      incomingRobuxTotal: achatsRobux + abonnement + versements,
-      outgoingRobuxTotal: depenses
-    });
-    return true;
+    // Les noms de champs changent au fil des refontes : on les classe par
+    // mot-clé, et tout total dont la simulation n'a pas l'équivalent — ventes,
+    // transferts, publicité — passe à zéro plutôt que de garder le vrai chiffre.
+    let touched = false;
+    for (const cle of Object.keys(data)) {
+      if (typeof data[cle] !== 'number' || !/total$/i.test(cle)) continue;
+      const k = cle.toLowerCase();
+      let v;
+      if (/pending/.test(k)) v = 0;
+      else if (/incoming/.test(k)) v = entrant;
+      else if (/outgoing/.test(k)) v = depenses;
+      else if (/currencypurchase/.test(k)) v = achatsRobux;
+      else if (/premium|stipend/.test(k)) v = abonnement;
+      else if (/payout/.test(k)) v = versements;
+      else if (/purchase/.test(k)) v = depenses;
+      else v = 0;
+      if (data[cle] !== v) { data[cle] = v; touched = true; }
+    }
+    return touched;
   }
 
   // ---------- 6 bis. ÉTAT « POSSÉDÉ » SUR LA PAGE D'UN ARTICLE ----------
