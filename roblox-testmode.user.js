@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.7
+// @version      1.8
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -31,6 +31,7 @@
     enabled: true,
     reloadAfterPurchase: true,
     wearing: [],    // articles simulés actuellement portés
+    ledger: [],     // registre des mouvements : sa somme vaut le solde
     netLog: [],     // dernières requêtes POST vers Roblox, pour diagnostic
     me: null,       // vrai compte connecté : { id, name, displayName }
     spoof: null     // identité empruntée : { id, name, displayName, hasVerifiedBadge, ... }
@@ -44,6 +45,7 @@
       const s = Object.assign({}, DEFAULTS, raw);
       if (!Array.isArray(s.owned)) s.owned = [];
       if (!Array.isArray(s.wearing)) s.wearing = [];
+      if (!Array.isArray(s.ledger)) s.ledger = [];
       return s;
     } catch {
       return Object.assign({}, DEFAULTS, { owned: [] });
@@ -859,6 +861,10 @@
     // -- tenue portée --
     if (injectWearing(url, data)) touched = true;
 
+    // -- transactions --
+    if (injectTransactions(url, data)) touched = true;
+    if (injectTotals(url, data)) touched = true;
+
     return touched ? JSON.stringify(data) : text;
   }
 
@@ -1082,6 +1088,14 @@
   }
 
   function recordPurchase(item) {
+    ecrire({
+      kind: 'Purchase',
+      name: item.name,
+      amount: -item.price,
+      assetId: item.assetId,
+      agentName: item.creatorName || 'Roblox',
+      detailType: item.itemType || 'Asset'
+    });
     state.balance = Math.max(0, state.balance - item.price);
     if (!item.assetId || !ownsAsset(item.assetId)) state.owned.push(item);
     save();
@@ -1374,6 +1388,211 @@
     }
   }
 
+  // ---------- 5 bis. REGISTRE DES TRANSACTIONS ----------
+  // Le solde n'est pas un nombre posé à côté d'un historique décoratif : il est
+  // la somme du registre. Tout mouvement y est inscrit, donc la page des
+  // transactions et le solde ne peuvent pas se contredire.
+
+  // Générateur reproductible : deux appels avec la même graine donnent le même
+  // historique, ce qui évite qu'il change à chaque rechargement.
+  function alea(graine) {
+    let a = graine >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Articles connus du catalogue, avec des prix de l'ordre des vrais.
+  const ARTICLES_FICTIFS = [
+    ['Valkyrie Helm', 259997], ['Sparkle Time Fedora', 78000], ['Red Iron Horns', 165],
+    ['Clockwork\'s Headphones', 189000], ['Frozen Horns of the Frigid Planes', 899],
+    ['Bluesteel Egg of Genesis', 47500], ['Rainbow Shaggy', 1200],
+    ['Black Iron Command Helm', 32000], ['Beautiful Hair for Beautiful People', 250],
+    ['Dominus Empyreus', 1000000], ['Shaggy', 750], ['Cardboard Cutout', 45],
+    ['Robloxian 2.0 Package', 350], ['Korblox Deathspeaker', 17000],
+    ['Headless Head', 31000], ['Purple Banded Top Hat', 5500],
+    ['Perfectly Legitimate Business Hat', 2400], ['Telamon\'s Chicken Suit', 1500],
+    ['Silverthorn Antlers', 25000], ['White Sparkle Time Fedora', 100000],
+    ['Midnight Blue Sparkle Time Fedora', 46000], ['Ghosdeeri', 12500]
+  ];
+
+  const PALIERS_ROBUX = [400, 800, 1700, 4500, 10000, 22500];
+
+  let idRegistre = Date.now();
+  const prochainId = () => ++idRegistre;
+
+  function ecrire(entree) {
+    state.ledger.push(Object.assign({ id: prochainId(), created: new Date().toISOString() }, entree));
+    if (state.ledger.length > 400) state.ledger = state.ledger.slice(-400);
+  }
+
+  // Historique de départ : des dépenses crédibles, et les crédits qui vont avec,
+  // de sorte que la somme du registre retombe exactement sur le solde affiché.
+  function genererHistorique(solde) {
+    const r = alea(Math.floor(solde) ^ 0x5f3759df);
+    const maintenant = Date.now();
+    const AN = 365 * 24 * 3600 * 1000;
+    const entrees = [];
+
+    const quand = (fraction) =>
+      new Date(maintenant - Math.floor(fraction * AN)).toISOString();
+
+    // --- Dépenses : entre la moitié et 90 % du solde ---
+    const cibleDepense = Math.round(solde * (0.5 + r() * 0.4));
+    let depense = 0;
+    let garde = 0;
+    const vus = {};   // acheter deux fois le même objet de collection ferait faux
+    while (depense < cibleDepense && garde++ < 300) {
+      const [nom, prix] = ARTICLES_FICTIFS[Math.floor(r() * ARTICLES_FICTIFS.length)];
+      if (vus[nom]) continue;
+      if (depense + prix > cibleDepense * 1.02) continue;
+      vus[nom] = true;
+      depense += prix;
+      entrees.push({
+        id: prochainId(), created: quand(r()), kind: 'Purchase',
+        name: nom, amount: -prix, agentName: 'Roblox', detailType: 'Asset'
+      });
+    }
+
+    // --- Crédits : abonnement mensuel, achats de Robux, puis un versement de
+    // groupe pour le reliquat, ce qui est le cas d'un gros solde. ---
+    const cibleCredit = depense + solde;
+    let credit = 0;
+
+    for (let mois = 1; mois <= 12 && credit < cibleCredit; mois++) {
+      credit += 2200;
+      entrees.push({
+        id: prochainId(), created: quand(mois / 12), kind: 'PremiumStipend',
+        name: 'Premium Stipend', amount: 2200, agentName: 'Roblox', detailType: 'Currency'
+      });
+    }
+
+    for (let i = 0; i < 12 && credit < cibleCredit; i++) {
+      const palier = PALIERS_ROBUX[Math.floor(r() * PALIERS_ROBUX.length)];
+      if (credit + palier > cibleCredit) break;
+      credit += palier;
+      entrees.push({
+        id: prochainId(), created: quand(r()), kind: 'CurrencyPurchase',
+        name: palier.toLocaleString('en-US') + ' Robux', amount: palier,
+        agentName: 'Roblox', detailType: 'Currency'
+      });
+    }
+
+    // Le reliquat part en versements de groupe étalés sur l'année : un seul
+    // virement de plusieurs millions ne ressemblerait à rien.
+    let reste = cibleCredit - credit;
+    const parts = 4 + Math.floor(r() * 5);
+    for (let i = 0; i < parts && reste > 0; i++) {
+      const dernier = i === parts - 1;
+      const part = dernier ? reste
+        : Math.min(reste, Math.round((reste / (parts - i)) * (0.6 + r() * 0.8)));
+      if (part <= 0) continue;
+      reste -= part;
+      entrees.push({
+        id: prochainId(), created: quand((i + 0.5) / parts), kind: 'GroupPayout',
+        name: 'Group Payout', amount: part, agentName: 'Roblox', detailType: 'Currency'
+      });
+    }
+    if (reste > 0) {
+      entrees.push({
+        id: prochainId(), created: quand(0.99), kind: 'GroupPayout',
+        name: 'Group Payout', amount: reste, agentName: 'Roblox', detailType: 'Currency'
+      });
+    }
+
+    entrees.sort((a, b) => new Date(b.created) - new Date(a.created));
+    return entrees;
+  }
+
+  function ensureLedger() {
+    if (state.ledger.length) return;
+    state.ledger = genererHistorique(state.balance);
+    save();
+  }
+
+  // Le solde reste la référence : tout écart est inscrit plutôt que masqué.
+  function ajusterRegistre(avant, apres, motif) {
+    const ecart = apres - avant;
+    if (!ecart) return;
+    ecrire({
+      kind: ecart > 0 ? 'CurrencyPurchase' : 'Purchase',
+      name: motif, amount: ecart, agentName: 'Roblox', detailType: 'Currency'
+    });
+  }
+
+  const TRANSACTIONS_RE = /economy\.roblox\.com\/v\d+\/users\/\d+\/transactions\b/i;
+  const TOTALS_RE = /economy\.roblox\.com\/v\d+\/users\/\d+\/transaction-totals\b/i;
+
+  const TYPE_PAR_ONGLET = {
+    purchase: ['Purchase'],
+    sale: ['Sale'],
+    currencypurchase: ['CurrencyPurchase'],
+    premiumstipend: ['PremiumStipend'],
+    grouppayout: ['GroupPayout']
+  };
+
+  function entreeApi(e) {
+    return {
+      id: e.id,
+      created: e.created,
+      isPending: false,
+      agent: { id: 1, type: 'User', name: e.agentName || 'Roblox' },
+      details: { id: e.assetId || 0, name: e.name, type: e.detailType || 'Asset' },
+      currency: { amount: e.amount, type: 'Robux' }
+    };
+  }
+
+  function injectTransactions(url, data) {
+    if (!TRANSACTIONS_RE.test(url) || !Array.isArray(data.data)) return false;
+    ensureLedger();
+
+    const params = new URLSearchParams((url.split('?')[1] || ''));
+    const onglet = String(params.get('transactionType') || 'Purchase').toLowerCase();
+    const voulus = TYPE_PAR_ONGLET[onglet];
+
+    let lignes = state.ledger.slice().sort((a, b) => new Date(b.created) - new Date(a.created));
+    if (voulus) lignes = lignes.filter(e => voulus.indexOf(e.kind) !== -1);
+
+    const limite = Math.min(Number(params.get('limit')) || 10, 100);
+    const depart = Number(params.get('cursor')) || 0;
+    const page = lignes.slice(depart, depart + limite);
+
+    data.data = page.map(entreeApi);
+    data.previousPageCursor = depart > 0 ? String(Math.max(0, depart - limite)) : null;
+    data.nextPageCursor = depart + limite < lignes.length ? String(depart + limite) : null;
+    return true;
+  }
+
+  function injectTotals(url, data) {
+    if (!TOTALS_RE.test(url)) return false;
+    ensureLedger();
+
+    const somme = (kinds, signe) => state.ledger
+      .filter(e => kinds.indexOf(e.kind) !== -1 && (signe > 0 ? e.amount > 0 : e.amount < 0))
+      .reduce((t, e) => t + e.amount, 0);
+
+    const depenses = somme(['Purchase'], -1);
+    const achatsRobux = somme(['CurrencyPurchase'], 1);
+    const abonnement = somme(['PremiumStipend'], 1);
+    const versements = somme(['GroupPayout'], 1);
+
+    // On écrase les champs connus sans toucher aux autres : la forme exacte de
+    // cette réponse varie, et un champ inventé vaut mieux qu'un champ perdu.
+    Object.assign(data, {
+      salesTotal: 0,
+      purchasesTotal: depenses,
+      currencyPurchasesTotal: achatsRobux,
+      premiumStipendsTotal: abonnement,
+      groupPayoutsTotal: versements,
+      incomingRobuxTotal: achatsRobux + abonnement + versements,
+      outgoingRobuxTotal: depenses
+    });
+    return true;
+  }
+
   // ---------- 6 bis. ÉTAT « POSSÉDÉ » SUR LA PAGE D'UN ARTICLE ----------
   // L'API suffit quand la page l'interroge ; ceci couvre le cas où le bouton
   // est rendu côté serveur, et c'est ce que l'on voit juste après l'achat,
@@ -1622,6 +1841,33 @@
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
+          <h2>Transactions</h2>
+          <span class="rbx-tm-badge rbx-tm-count" data-role="ledger-count">0</span>
+        </div>
+        <p class="rbx-tm-sub">A ledger whose entries add up to the balance above, so the transactions page and the balance can never disagree.</p>
+
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Robux earned</span>
+          <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="earned">0</span></span>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Robux spent</span>
+          <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="spent">0</span></span>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">Ledger balance</span>
+          <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="ledger-net">0</span></span>
+        </div>
+        <div class="rbx-tm-row">
+          <span class="rbx-tm-label">History</span>
+          <span class="rbx-tm-right rbx-tm-chips">
+            <button class="rbx-tm-btn" data-act="regen-ledger" type="button">Regenerate</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="rbx-tm-card">
+        <div class="rbx-tm-head">
           <h2>Network log</h2>
           <span class="rbx-tm-badge rbx-tm-count" data-role="log-count">0</span>
         </div>
@@ -1656,19 +1902,27 @@
         return;
       }
 
+      const soldeAvant = state.balance;
+
       if (btn.dataset.add) {
         state.balance = Math.max(0, state.balance + Number(btn.dataset.add));
+        ajusterRegistre(soldeAvant, state.balance, 'Robux Purchase');
       } else if (btn.dataset.act === 'apply') {
         const v = Number(el.querySelector('#rbx-p-input').value);
         state.balance = Number.isFinite(v) ? Math.max(0, Math.floor(v)) : state.balance;
+        ajusterRegistre(soldeAvant, state.balance, 'Balance Adjustment');
       } else if (btn.dataset.act === 'zero') {
         state.balance = 0;
+        ajusterRegistre(soldeAvant, state.balance, 'Balance Adjustment');
+      } else if (btn.dataset.act === 'regen-ledger') {
+        state.ledger = [];
+        ensureLedger();
       } else if (btn.dataset.act === 'clear-inv') {
         state.owned = [];
       } else if (btn.dataset.act === 'clear-log') {
         state.netLog = [];
       } else if (btn.dataset.act === 'reset') {
-        Object.assign(state, DEFAULTS, { owned: [], me: state.me });
+        Object.assign(state, DEFAULTS, { owned: [], wearing: [], ledger: [], me: state.me });
         lookupState = { busy: false, error: '', found: null };
       } else {
         return;
@@ -1792,6 +2046,15 @@
       ? state.me.displayName + ' (@' + state.me.name + ')'
       : 'not identified';
 
+    const registre = state.ledger || [];
+    const totalSi = (test) => registre.filter(test).reduce((t, e) => t + e.amount, 0);
+    const gagne = totalSi(e => e.amount > 0);
+    const depense = totalSi(e => e.amount < 0);
+    q('[data-role="ledger-count"]').textContent = registre.length;
+    q('[data-role="earned"]').textContent = fmt(gagne);
+    q('[data-role="spent"]').textContent = fmt(depense);
+    q('[data-role="ledger-net"]').textContent = fmt(gagne + depense);
+
     const journal = state.netLog || [];
     q('[data-role="log-count"]').textContent = journal.length;
     q('[data-role="log-empty"]').style.display = journal.length ? 'none' : '';
@@ -1876,6 +2139,7 @@
   });
 
   function start() {
+    ensureLedger();
     ensureMe().then(() => { renderPanel(); paintIdentity(); });
     tick();
     obs.observe(document.body, { childList: true, subtree: true });

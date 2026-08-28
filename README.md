@@ -104,6 +104,15 @@ no request reaches Roblox. So on item pages, and only there, the prompt is
 dismissed and the simulated purchase is completed directly. The account's real
 security settings are never modified.
 
+**Transactions** — the balance is not a number sitting next to a decorative
+history: it is the sum of a ledger. Every simulated purchase and every change
+made from the panel is written to it, so the transactions page and the balance
+cannot disagree. On first run the ledger is seeded with a plausible year of
+activity — unique collectible purchases, monthly Premium stipends, Robux
+package purchases and group payouts spread over months — sized so the entries
+add up to exactly the current balance. The transactions API and the summary
+totals are served from it, with working pagination and per-tab filtering.
+
 **Network log** — the most recent POST requests sent to Roblox, each marked as
 recognised as a purchase or let through. This is the quickest way to diagnose a
 purchase that gets stuck, with no console needed.
