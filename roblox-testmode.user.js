@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.6
+// @version      1.7
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -61,9 +61,7 @@
   const origFetch = window.fetch && window.fetch.bind(window);
 
   // ---------- IDENTIFIANTS VISUELS ----------
-  const BANNER_ID = 'rbx-testmode-banner';
   const PANEL_ID = 'rbx-testmode-panel';
-  const BAR_H = 34;
 
   // Hexagone évidé : la même forme que l'icône Robux du site.
   const ROBUX_ICON =
@@ -87,17 +85,6 @@
     const s = document.createElement('style');
     s.id = 'rbx-testmode-style';
     s.textContent = `
-      /* ----- Bandeau permanent, en bas de l'écran ----- */
-      #${BANNER_ID} {
-        position: fixed; bottom: 0; left: 0; right: 0; height: ${BAR_H}px;
-        z-index: 2147483647;
-        background: repeating-linear-gradient(45deg, #b3261e 0 12px, #8c1d16 12px 24px);
-        color: #fff; font: 700 13px/${BAR_H}px system-ui, sans-serif;
-        letter-spacing: .12em; text-align: center; text-transform: uppercase;
-        pointer-events: none; user-select: none;
-      }
-      html { padding-bottom: ${BAR_H}px !important; }
-
       /* ----- Panneau : jetons repris du design system Roblox ----- */
       #${PANEL_ID} {
         --rbx-card: #ffffff;
@@ -125,7 +112,7 @@
       }
       #${PANEL_ID}.rbx-panel-floating {
         position: fixed; top: 12px; right: 12px; width: 380px;
-        max-height: calc(100vh - ${BAR_H + 24}px); overflow: auto;
+        max-height: calc(100vh - 24px); overflow: auto;
         z-index: 2147483646;
       }
       #${PANEL_ID}.rbx-panel-floating .rbx-tm-card { box-shadow: 0 8px 30px rgba(0,0,0,.24); }
@@ -323,15 +310,6 @@
       }
     `;
     (document.head || document.documentElement).appendChild(s);
-  }
-
-  function injectBanner() {
-    if (document.getElementById(BANNER_ID)) return;
-    if (!document.body) return;
-    const d = document.createElement('div');
-    d.id = BANNER_ID;
-    d.textContent = 'TEST MODE — SIMULATED DATA, NO REAL PURCHASES';
-    document.body.appendChild(d);
   }
 
   injectStyle();
@@ -1878,7 +1856,6 @@
 
   // ---------- 8. BOUCLE D'ENTRETIEN ----------
   const tick = () => {
-    injectBanner();
     paintSecurityMeta();
     paintBalance();
     paintIdentity();

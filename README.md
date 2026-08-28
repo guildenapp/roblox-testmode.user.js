@@ -118,5 +118,8 @@ everything.
 Nothing leaves the browser: purchases are intercepted before being sent, and
 Roblox's server knows nothing about these items or this balance. The simulated
 inventory disappears on another device, in another browser, or after clearing
-local storage. The red banner is permanent and cannot be hidden without editing
-the file.
+local storage.
+
+There is no longer a banner across the page. What is on screen is therefore
+indistinguishable from a real Roblox page — the "Test mode" badges in the panel
+are the only visible marker left.
