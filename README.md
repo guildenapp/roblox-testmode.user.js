@@ -10,7 +10,8 @@ server — purchase requests are short-circuited before they leave the browser.
 | File | What it does |
 | --- | --- |
 | `roblox-testmode.user.js` | The full script. It does all the work. |
-| `loader.user.js` | A tiny loader: it downloads and runs the script above from GitHub. |
+| `loader.user.js` | A tiny loader for extensions that read a local file: it downloads and runs the script above from GitHub. |
+| `chrome-extension/` | A Chrome extension that loads the script and keeps it up to date by itself. See its own README. |
 
 ### Simple install (no automatic updates)
 
