@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      3.0
+// @version      3.1
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '3.0';
+  const VERSION = '3.1';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -1734,9 +1734,26 @@
   const CREATOR_CONTAINER = '.item-details-creator-container';
 
   function ownedBadge() {
-    // `item-owned` couvre aussi le badge que Roblox pose lui-même quand
-    // l'article est réellement possédé : pas de doublon dans ce cas.
-    if (document.querySelector('.item-owned')) return;
+    // Le site rend ce conteneur même lorsqu'on ne possède pas l'article : il est
+    // alors vide. Le tenir pour un badge déjà posé empêchait le nôtre
+    // d'apparaître. On distingue donc « présent » de « rempli ».
+    const existant = document.querySelector('.item-owned');
+    if (existant) {
+      const rempli = normalise(existant.textContent) || existant.querySelector('.label-checkmark');
+
+      if (rempli && estVisible(existant)) return;      // le site l'affiche déjà
+
+      if (!rempli) {
+        // Conteneur vide : le remplir donne le résultat le plus fidèle.
+        existant.innerHTML = CHECK_ICON + '<span>Item Owned</span>';
+        existant.classList.add('rbx-tm-owned-badge');
+        verifierIconeNative(existant);
+        if (estVisible(existant)) return;
+      }
+      // Présent mais masqué : on continue, et on pose le nôtre à côté.
+    }
+
+    if (document.querySelector('.rbx-tm-owned-badge')) return;   // déjà posé par nous
 
     const hote = document.querySelector(CREATOR_CONTAINER);
     if (hote) {
@@ -1761,6 +1778,7 @@
       candidats.push(el);
     }
     if (!candidats.length) return;
+    if (document.querySelector('.rbx-tm-owned-badge')) return;
 
     // Une ligne « By … » peut exister ailleurs dans la page ; celle de
     // l'article est la première qui suit son titre.
