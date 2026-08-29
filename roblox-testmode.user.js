@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.0
+// @version      2.1
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -19,6 +19,10 @@
   if (window.__rbxTestModeLoaded) return;
   window.__rbxTestModeLoaded = true;
 
+  // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
+  // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
+  const VERSION = '2.1';
+
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
   const STORAGE_KEY = 'rbx_testmode_state';
@@ -32,6 +36,7 @@
     reloadAfterPurchase: true,
     wearing: [],    // articles simulés actuellement portés
     ledger: [],     // registre des mouvements : sa somme vaut le solde
+    vueVersion: null,   // dernière version déjà signalée à l'utilisateur
     netLog: [],     // dernières requêtes POST vers Roblox, pour diagnostic
     me: null,       // vrai compte connecté : { id, name, displayName }
     spoof: null     // identité empruntée : { id, name, displayName, hasVerifiedBadge, ... }
@@ -287,6 +292,27 @@
       }
       /* La règle de taille du panneau ne porte pas jusqu'ici. */
       .rbx-tm-inv-card .rbx-tm-icon { width: 14px; height: 14px; flex: none; }
+      /* Pastille de version, en bas à droite : le seul moyen de voir d'un coup
+         d'œil quelle version tourne, et si une mise à jour est bien passée. */
+      #rbx-tm-version {
+        position: fixed; right: 12px; bottom: 12px; z-index: 2147483646;
+        display: flex; align-items: center; gap: 6px;
+        padding: 6px 10px; border-radius: 999px;
+        background: rgba(27, 29, 31, .82); color: #fff;
+        font: 600 12px/1 system-ui, sans-serif; letter-spacing: .02em;
+        cursor: pointer; user-select: none;
+        box-shadow: 0 2px 10px rgba(0,0,0,.25);
+        opacity: .55; transition: opacity .15s, background .15s;
+      }
+      #rbx-tm-version:hover { opacity: 1; }
+      #rbx-tm-version .rbx-tm-dot {
+        width: 7px; height: 7px; border-radius: 50%; background: #b3261e; flex: none;
+      }
+      /* Juste après une mise à jour : bien visible, puis discret. */
+      #rbx-tm-version.rbx-tm-neuf {
+        opacity: 1; background: #1f7a3d; padding: 8px 14px; font-size: 13px;
+      }
+
       /* État « possédé » reproduit sur la page d'un article. */
       #rbx-tm-owned { margin: 12px 0 20px; }
       #rbx-tm-owned .rbx-tm-owned-row {
@@ -1720,6 +1746,49 @@
     ancre.parentElement.insertBefore(bloc, ancre);
   }
 
+  // ---------- 6 bis 2. PASTILLE DE VERSION ----------
+  function paintVersion() {
+    if (!document.body) return;
+
+    let pastille = document.getElementById('rbx-tm-version');
+    if (!state.enabled) {
+      if (pastille) pastille.remove();
+      return;
+    }
+
+    const neuf = state.vueVersion !== VERSION;
+
+    if (!pastille) {
+      pastille = document.createElement('div');
+      pastille.id = 'rbx-tm-version';
+      pastille.title = 'Roblox TEST MODE — click to open the panel';
+      pastille.addEventListener('click', () => {
+        panelForced = true;
+        panelClosed = false;
+        mountPanel();
+      });
+      document.body.appendChild(pastille);
+    }
+
+    const texte = neuf ? 'TEST MODE updated to v' + VERSION : 'TEST v' + VERSION;
+    if (pastille.dataset.rbxTexte !== texte) {
+      pastille.dataset.rbxTexte = texte;
+      pastille.innerHTML = '<span class="rbx-tm-dot"></span><span>' + esc(texte) + '</span>';
+    }
+    pastille.classList.toggle('rbx-tm-neuf', neuf);
+
+    // La mention « mise à jour » ne s'affiche qu'une fois, quelques secondes.
+    if (neuf && !pastille.dataset.rbxMinuteur) {
+      pastille.dataset.rbxMinuteur = '1';
+      setTimeout(() => {
+        state.vueVersion = VERSION;
+        save();
+        delete pastille.dataset.rbxTexte;
+        paintVersion();
+      }, 6000);
+    }
+  }
+
   // ---------- 6 ter. FENÊTRE DE VÉRIFICATION EN DEUX ÉTAPES ----------
   // Les deux réponses possibles bloquent : « non configurée » fait afficher
   // « configure-la d'abord », « configurée » fait réclamer un code. Comme
@@ -2180,6 +2249,7 @@
     paintIdentity();
     paintInventory();
     paintOwned();
+    paintVersion();
     bypassTwoStep();
     mountPanel();
     syncTheme();
