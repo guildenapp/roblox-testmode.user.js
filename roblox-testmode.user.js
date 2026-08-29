@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.7
+// @version      2.9
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.7';
+  const VERSION = '2.9';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -81,12 +81,12 @@
     '<circle cx="12" cy="12" r="10" fill="#00b06f"/>' +
     '<path fill="#fff" d="m10.6 16.2-4-4 1.4-1.4 2.6 2.6 5.4-5.4 1.4 1.4z"/></svg>';
 
-  // La vraie pastille du site : une coche blanche, tirée de son sprite, sur un
-  // rond vert dont la couleur vient de sa propre variable via `bg-system-success`.
-  // Le rond n'existe pas comme classe : c'est la seule partie qu'on dessine.
+  // Structure relevée sur une page réelle : le rond vert est `label-checkmark`,
+  // la coche `icon-checkmark-white-bold`, le tout dans un `item-owned`. Nos
+  // propres classes sont ajoutées à côté, pour le repli et le repérage.
   const CHECK_ICON =
-    '<span class="rbx-tm-check-circle bg-system-success">' +
-    '<span class="icon-checkmark-white-bold rbx-tm-check-native"></span></span>';
+    '<div class="label-checkmark rbx-tm-check-circle">' +
+    '<span class="icon-checkmark-white-bold rbx-tm-check-native"></span></div>';
 
   const TRANSPARENT = /^(transparent|rgba\(0,\s*0,\s*0,\s*0\))$/;
 
@@ -103,9 +103,9 @@
       return;
     }
 
-    const rond = natif.closest('.rbx-tm-check-circle');
+    const rond = natif.closest('.rbx-tm-check-circle, .label-checkmark');
     if (rond && TRANSPARENT.test(getComputedStyle(rond).backgroundColor)) {
-      rond.style.background = '#00b06f';   // variable de couleur absente
+      rond.style.background = '#00b06f';   // le rond du site n'est pas stylé ici
     }
   }
 
@@ -1729,9 +1729,26 @@
   }
 
   // « ✔ Item Owned » à côté de la ligne du créateur, comme sur le vrai site.
-  function ownedBadge() {
-    if (document.querySelector('.rbx-tm-owned-badge')) return;
+  // Conteneur du créateur, tel que le site le nomme. C'est là que « Item Owned »
+  // se place, juste après le nom du créateur.
+  const CREATOR_CONTAINER = '.item-details-creator-container';
 
+  function ownedBadge() {
+    // `item-owned` couvre aussi le badge que Roblox pose lui-même quand
+    // l'article est réellement possédé : pas de doublon dans ce cas.
+    if (document.querySelector('.item-owned')) return;
+
+    const hote = document.querySelector(CREATOR_CONTAINER);
+    if (hote) {
+      hote.insertAdjacentHTML('beforeend',
+        '<span class="item-owned rbx-tm-owned-badge">' + CHECK_ICON +
+        '<span>Item Owned</span></span>');
+      verifierIconeNative(hote);
+      return;
+    }
+
+    // Repli pour les pages dont la structure diffère : on repère la ligne
+    // « By … » qui suit le titre.
     const candidats = [];
     for (const el of document.querySelectorAll('span, div, p, a, h2')) {
       if (el.closest('#' + PANEL_ID)) continue;
@@ -1789,7 +1806,6 @@
 
     const ancre = boutons[0];
     ancre.parentElement.insertBefore(bloc, ancre);
-    bloc.classList.add('item-details');
   }
 
   // ---------- 6 bis 2. PASTILLE DE VERSION ----------
@@ -2337,17 +2353,25 @@
     const EXACTS = ['#item-container', '.item-container', '.item-details'];
     const REPERES = '.purchase-button, .purchase-button-link, [class*="item-details" i]';
 
+    const aNous = (el) => !el || el.closest('#' + PANEL_ID + ', #rbx-tm-owned, #rbx-tm-version');
+
     let cible = null;
     for (const sel of EXACTS) {
-      cible = document.querySelector(sel);
+      cible = Array.prototype.find.call(document.querySelectorAll(sel), el => !aNous(el)) || null;
       if (cible) break;
     }
 
     if (!cible) {
+      // Le premier ancêtre qui contient le titre ne contient pas forcément la
+      // zone d'achat — sur la vraie page, « left » s'arrête au créateur. On
+      // continue donc de monter tant que le prix ou le bouton manquent.
       const titre = document.querySelector('h1');
       let noeud = titre;
-      for (let i = 0; noeud && i < 10; i++) {
-        if (noeud.querySelector(REPERES) && noeud.querySelector('h1')) { cible = noeud; break; }
+      for (let i = 0; noeud && i < 12; i++) {
+        const complet = noeud.querySelector('.purchase-button, .purchase-button-link') ||
+                        noeud.querySelector('[class*="price" i]');
+        if (complet && noeud.querySelector('h1')) { cible = noeud; break; }
+        cible = noeud.querySelector(REPERES) ? noeud : cible;
         noeud = noeud.parentElement;
       }
     }
