@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      3.1
+// @version      3.2
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,12 +21,14 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '3.1';
+  const VERSION = '3.2';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
   const STORAGE_KEY = 'rbx_testmode_state';
-  const RELOAD_DELAY = 2200;      // laisse la confirmation d'achat de Roblox s'afficher
+  // Assez court pour qu'on ne voie pas la page changer sous la fenêtre d'achat,
+  // assez long pour que l'état soit écrit avant le rechargement.
+  const RELOAD_DELAY = 400;
   // ----------------------------
 
   const DEFAULTS = {
@@ -1155,6 +1157,7 @@
   }
 
   function recordPurchase(item) {
+    if (rechargementPrevu) return item;   // achat déjà pris en compte
     ecrire({
       kind: 'Purchase',
       name: item.name,
@@ -1184,6 +1187,10 @@
 
   // Si un jour un endpoint est pris à tort pour un achat, ce garde-fou évite
   // que le site devienne inutilisable : au pire un rechargement est perdu.
+  // Tant qu'un rechargement est prévu, plus rien n'est repeint : sinon
+  // « Item Owned » apparaissait derrière la fenêtre d'achat encore ouverte.
+  let rechargementPrevu = false;
+
   function scheduleReload(url) {
     // Le garde-fou ne vise que la répétition d'un même appel — deux achats
     // différents coup sur coup doivent tous les deux recharger.
@@ -1197,7 +1204,7 @@
       sessionStorage.setItem(cle, url + '|' + Date.now());
     } catch { /* stockage de session indisponible */ }
 
-    // On laisse la confirmation de Roblox s'afficher avant de recharger.
+    rechargementPrevu = true;
     setTimeout(() => location.reload(), RELOAD_DELAY);
   }
 
@@ -2325,6 +2332,7 @@
 
   // ---------- 8. BOUCLE D'ENTRETIEN ----------
   const tick = () => {
+    if (rechargementPrevu) return;   // la page part se recharger : on ne touche à rien
     paintSecurityMeta();
     paintBalance();
     paintIdentity();
