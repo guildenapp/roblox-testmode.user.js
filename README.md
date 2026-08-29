@@ -62,8 +62,12 @@ No CSP, no `eval`: the extension simply reloads a local file that changed.
 
 ## What it does
 
-The panel is added to the top of the **Settings** and **Inventory** pages, in
-the site's own visual language. It holds four cards.
+The panel is added to the top of the **Settings** and **Inventory** pages. Its
+buttons, inputs, headings and item cards carry Roblox's own class names —
+`btn-primary-md`, `form-control`, `font-header-2`, `item-card` and friends — so
+they inherit the site's real styles rather than an imitation of them, and follow
+along when Roblox restyles. Only layout the site has no equivalent for is styled
+here, plus a fallback that applies when a class is missing. It holds five cards.
 
 **Robux** — set the simulated balance, add quick amounts, turn test mode on or
 off. The header balance is rewritten, and the economy API responses are

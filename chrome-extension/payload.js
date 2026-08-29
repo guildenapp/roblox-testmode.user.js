@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      1.9
+// @version      2.0
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -155,26 +155,27 @@
       #${PANEL_ID} .rbx-tm-icon { width: 16px; height: 16px; flex: none; }
       #${PANEL_ID} .rbx-tm-chips { flex-wrap: wrap; }
 
-      #${PANEL_ID} .rbx-tm-input {
-        flex: 1; min-width: 0; font-size: 16px;
-        padding: 10px 14px; border-radius: 8px;
+      #${PANEL_ID} .rbx-tm-input { flex: 1; min-width: 0; }
+      #${PANEL_ID} .rbx-tm-input:not(.form-control) {
+        font-size: 16px; padding: 10px 14px; border-radius: 8px;
         border: 1px solid var(--rbx-border);
         background: var(--rbx-card); color: var(--rbx-text);
       }
-      #${PANEL_ID} .rbx-tm-input:focus {
-        outline: 2px solid var(--rbx-blue); outline-offset: -1px; border-color: transparent;
-      }
 
-      #${PANEL_ID} .rbx-tm-btn {
-        font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;
-        padding: 10px 18px; border-radius: 8px; border: 0;
+      /* Boutons, champs et cartes portent les classes de Roblox — btn-primary-md,
+         form-control, item-card… — pour hériter de ses styles réels. On ne
+         garde ici que ce qu'elles ne fournissent pas : la disposition. Le reste
+         est un filet, appliqué seulement si la classe correspondante manque. */
+      #${PANEL_ID} .rbx-tm-btn { cursor: pointer; white-space: nowrap; }
+      #${PANEL_ID} .rbx-tm-btn:disabled { opacity: .5; cursor: default; }
+      #${PANEL_ID} .rbx-tm-btn:not([class*="btn-"]) {
+        font-size: 14px; font-weight: 600; padding: 10px 18px;
+        border-radius: 8px; border: 0;
         background: var(--rbx-subtle); color: var(--rbx-text);
       }
-      #${PANEL_ID} .rbx-tm-btn:hover { filter: brightness(.96); }
-      #${PANEL_ID} .rbx-tm-btn:disabled { opacity: .5; cursor: default; }
-      #${PANEL_ID} .rbx-tm-btn.rbx-tm-primary { background: var(--rbx-blue); color: #fff; }
-      #${PANEL_ID} .rbx-tm-btn.rbx-tm-primary:hover { background: var(--rbx-blue-dark); filter: none; }
-      #${PANEL_ID} .rbx-tm-chips .rbx-tm-btn { padding: 8px 14px; font-size: 13px; }
+      #${PANEL_ID} .rbx-tm-chips .rbx-tm-btn:not([class*="btn-"]) {
+        padding: 8px 14px; font-size: 13px;
+      }
 
       /* Interrupteur repris de celui des paramètres Roblox. */
       #${PANEL_ID} .rbx-tm-switch { position: relative; width: 48px; height: 28px; flex: none; }
@@ -235,12 +236,11 @@
         font-size: 13px; font-weight: 600; line-height: 1.3;
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
       }
-      #${PANEL_ID} .rbx-tm-item .rbx-tm-wear {
-        width: 100%; margin-top: 6px; padding: 6px 8px; font-size: 12px;
-        font-weight: 600; border: 0; border-radius: 6px; cursor: pointer;
+      #${PANEL_ID} .rbx-tm-item .rbx-tm-wear { width: 100%; margin-top: 6px; cursor: pointer; }
+      #${PANEL_ID} .rbx-tm-item .rbx-tm-wear:not([class*="btn-"]) {
+        padding: 6px 8px; font-size: 12px; font-weight: 600; border: 0; border-radius: 6px;
         background: var(--rbx-subtle); color: var(--rbx-text);
       }
-      #${PANEL_ID} .rbx-tm-item .rbx-tm-wear.rbx-tm-on { background: var(--rbx-blue); color: #fff; }
       #${PANEL_ID} .rbx-tm-item .rbx-tm-item-price {
         display: flex; align-items: center; gap: 4px;
         font-size: 13px; font-weight: 700; margin-top: 4px;
@@ -293,13 +293,13 @@
         display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
       }
       #rbx-tm-owned .rbx-tm-owned-text { flex: 1 1 220px; font-size: 16px; }
-      .rbx-tm-owned-btn {
-        display: inline-block; border: 0; cursor: pointer;
-        background: #f2f4f5; color: #1b1d1f;
+      .rbx-tm-owned-btn { display: inline-block; cursor: pointer; text-decoration: none; }
+      .rbx-tm-owned-btn:not([class*="btn-"]) {
+        border: 0; background: #f2f4f5; color: #1b1d1f;
         padding: 10px 22px; border-radius: 8px;
-        font: inherit; font-size: 15px; font-weight: 600; text-decoration: none;
+        font: inherit; font-size: 15px; font-weight: 600;
       }
-      body.dark-theme .rbx-tm-owned-btn { background: #393b3d; color: #fff; }
+      body.dark-theme .rbx-tm-owned-btn:not([class*="btn-"]) { background: #393b3d; color: #fff; }
       .rbx-tm-owned-badge {
         display: inline-flex; align-items: center; gap: 6px;
         margin-left: 12px; font-weight: 600; font-size: 16px;
@@ -1379,15 +1379,24 @@
       const key = String(it.assetId || it.at);
       if (grid.querySelector('[data-rbx-item="' + CSS.escape(key) + '"]')) continue;
 
+      // On reprend la structure de carte du site : la grille les aligne alors
+      // avec les vraies, sans avoir à recopier ses styles.
       const card = document.createElement('div');
-      card.className = 'rbx-tm-inv-card';
+      card.className = 'rbx-tm-inv-card item-card-container';
       card.dataset.rbxItem = key;
       card.title = 'Simulated item — test mode';
       card.innerHTML =
-        (it.thumb ? '<img src="' + esc(it.thumb) + '" alt="" />' : '<img alt="" />') +
-        '<div class="rbx-tm-inv-body">' +
-          '<div class="rbx-tm-inv-name">' + esc(it.name) + '</div>' +
-          '<div class="rbx-tm-inv-price">' + ROBUX_ICON + ' ' + fmt(it.price) + '</div>' +
+        '<div class="item-card">' +
+          '<div class="item-card-thumb-container">' +
+            (it.thumb ? '<img class="item-card-thumb" src="' + esc(it.thumb) + '" alt="" />'
+                      : '<img class="item-card-thumb" alt="" />') +
+          '</div>' +
+          '<div class="rbx-tm-inv-body item-card-caption">' +
+            '<div class="rbx-tm-inv-name item-card-name">' + esc(it.name) + '</div>' +
+            '<div class="rbx-tm-inv-price item-card-price">' + ROBUX_ICON + ' ' + fmt(it.price) + '</div>' +
+            (isWorn(it.assetId)
+              ? '<div class="item-card-equipped-label">Equipped</div>' : '') +
+          '</div>' +
         '</div>';
       grid.insertBefore(card, grid.firstChild);
     }
@@ -1703,8 +1712,8 @@
     bloc.id = 'rbx-tm-owned';
     bloc.innerHTML =
       '<div class="rbx-tm-owned-row">' +
-        '<span class="rbx-tm-owned-text">This item is available in your inventory.</span>' +
-        '<a class="rbx-tm-owned-btn" href="' + inventaire + '">Inventory</a>' +
+        '<span class="rbx-tm-owned-text text-lead">This item is available in your inventory.</span>' +
+        '<a class="rbx-tm-owned-btn btn-control-md" href="' + inventaire + '">Inventory</a>' +
       '</div>';
 
     const ancre = boutons[0];
@@ -1794,35 +1803,35 @@
     el.innerHTML = `
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Robux</h2>
+          <h2 class="font-header-2">Robux</h2>
           <span class="rbx-tm-badge">Test mode</span>
           <button class="rbx-tm-close" type="button" title="Close">&times;</button>
         </div>
-        <p class="rbx-tm-sub">Simulated balance, visible only in this browser.</p>
+        <p class="rbx-tm-sub text-secondary">Simulated balance, visible only in this browser.</p>
 
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Current balance</span>
+          <span class="rbx-tm-label text-label">Current balance</span>
           <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="current">0</span></span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Set balance</span>
+          <span class="rbx-tm-label text-label">Set balance</span>
           <span class="rbx-tm-grow">
-            <input class="rbx-tm-input" id="rbx-p-input" type="number" min="0" step="1" inputmode="numeric" />
-            <button class="rbx-tm-btn rbx-tm-primary" data-act="apply" type="button">Apply</button>
+            <input class="rbx-tm-input form-control input-field" id="rbx-p-input" type="number" min="0" step="1" inputmode="numeric" />
+            <button class="rbx-tm-btn btn-primary-md" data-act="apply" type="button">Apply</button>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Add</span>
+          <span class="rbx-tm-label text-label">Add</span>
           <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-add="1000" type="button">+1,000</button>
-            <button class="rbx-tm-btn" data-add="10000" type="button">+10,000</button>
-            <button class="rbx-tm-btn" data-add="100000" type="button">+100,000</button>
-            <button class="rbx-tm-btn" data-add="1000000" type="button">+1,000,000</button>
-            <button class="rbx-tm-btn" data-act="zero" type="button">Set to 0</button>
+            <button class="rbx-tm-btn btn-control-xs" data-add="1000" type="button">+1,000</button>
+            <button class="rbx-tm-btn btn-control-xs" data-add="10000" type="button">+10,000</button>
+            <button class="rbx-tm-btn btn-control-xs" data-add="100000" type="button">+100,000</button>
+            <button class="rbx-tm-btn btn-control-xs" data-add="1000000" type="button">+1,000,000</button>
+            <button class="rbx-tm-btn btn-control-xs" data-act="zero" type="button">Set to 0</button>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Test mode active</span>
+          <span class="rbx-tm-label text-label">Test mode active</span>
           <span class="rbx-tm-right">
             <label class="rbx-tm-switch"><input type="checkbox" data-act="enabled" /><i></i></label>
           </span>
@@ -1831,54 +1840,54 @@
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Identity</h2>
+          <h2 class="font-header-2">Identity</h2>
           <span class="rbx-tm-badge">Test mode</span>
         </div>
-        <p class="rbx-tm-sub">Borrow a real public profile: display name, username, avatar and verified badge.</p>
+        <p class="rbx-tm-sub text-secondary">Borrow a real public profile: display name, username, avatar and verified badge.</p>
 
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Username</span>
+          <span class="rbx-tm-label text-label">Username</span>
           <span class="rbx-tm-grow">
-            <input class="rbx-tm-input" id="rbx-p-user" type="text" autocapitalize="off"
+            <input class="rbx-tm-input form-control input-field" id="rbx-p-user" type="text" autocapitalize="off"
                    autocorrect="off" spellcheck="false" placeholder="e.g. Azen" />
-            <button class="rbx-tm-btn rbx-tm-primary" data-act="lookup" type="button">Search</button>
+            <button class="rbx-tm-btn btn-primary-md" data-act="lookup" type="button">Search</button>
           </span>
         </div>
         <div class="rbx-tm-row rbx-tm-block" data-role="ident"></div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Use this identity</span>
+          <span class="rbx-tm-label text-label">Use this identity</span>
           <span class="rbx-tm-right">
             <label class="rbx-tm-switch"><input type="checkbox" data-act="spoof" /><i></i></label>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">My real account</span>
+          <span class="rbx-tm-label text-label">My real account</span>
           <span class="rbx-tm-right" data-role="real">—</span>
         </div>
       </div>
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Simulated inventory</h2>
+          <h2 class="font-header-2">Simulated inventory</h2>
           <span class="rbx-tm-badge rbx-tm-count" data-role="count">0</span>
         </div>
-        <p class="rbx-tm-sub">Items bought in test mode, kept and added to your inventory.</p>
+        <p class="rbx-tm-sub text-secondary">Items bought in test mode, kept and added to your inventory.</p>
 
         <div class="rbx-tm-row rbx-tm-block rbx-tm-bare">
           <div class="rbx-tm-grid" data-role="inv"></div>
           <p class="rbx-tm-empty" data-role="inv-empty">No items yet.</p>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Reload the page after a purchase</span>
+          <span class="rbx-tm-label text-label">Reload the page after a purchase</span>
           <span class="rbx-tm-right">
             <label class="rbx-tm-switch"><input type="checkbox" data-act="reload" /><i></i></label>
           </span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">History</span>
+          <span class="rbx-tm-label text-label">History</span>
           <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-act="clear-inv" type="button">Clear inventory</button>
-            <button class="rbx-tm-btn" data-act="reset" type="button">Reset everything</button>
+            <button class="rbx-tm-btn btn-control-xs" data-act="clear-inv" type="button">Clear inventory</button>
+            <button class="rbx-tm-btn btn-control-xs" data-act="reset" type="button">Reset everything</button>
           </span>
         </div>
         <p class="rbx-tm-note">Local only: nothing is sent to Roblox, no real Robux is spent or credited, and no item is actually acquired.</p>
@@ -1886,46 +1895,46 @@
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Transactions</h2>
+          <h2 class="font-header-2">Transactions</h2>
           <span class="rbx-tm-badge rbx-tm-count" data-role="ledger-count">0</span>
         </div>
-        <p class="rbx-tm-sub">A ledger whose entries add up to the balance above, so the transactions page and the balance can never disagree.</p>
+        <p class="rbx-tm-sub text-secondary">A ledger whose entries add up to the balance above, so the transactions page and the balance can never disagree.</p>
 
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Robux earned</span>
+          <span class="rbx-tm-label text-label">Robux earned</span>
           <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="earned">0</span></span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Robux spent</span>
+          <span class="rbx-tm-label text-label">Robux spent</span>
           <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="spent">0</span></span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Ledger balance</span>
+          <span class="rbx-tm-label text-label">Ledger balance</span>
           <span class="rbx-tm-right rbx-tm-amount">${ROBUX_ICON}<span data-role="ledger-net">0</span></span>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">History</span>
+          <span class="rbx-tm-label text-label">History</span>
           <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-act="regen-ledger" type="button">Regenerate</button>
+            <button class="rbx-tm-btn btn-control-xs" data-act="regen-ledger" type="button">Regenerate</button>
           </span>
         </div>
       </div>
 
       <div class="rbx-tm-card">
         <div class="rbx-tm-head">
-          <h2>Network log</h2>
+          <h2 class="font-header-2">Network log</h2>
           <span class="rbx-tm-badge rbx-tm-count" data-role="log-count">0</span>
         </div>
-        <p class="rbx-tm-sub">The most recent POST requests sent to Roblox. If a purchase gets stuck, this shows whether its request was recognised or let through.</p>
+        <p class="rbx-tm-sub text-secondary">The most recent POST requests sent to Roblox. If a purchase gets stuck, this shows whether its request was recognised or let through.</p>
 
         <div class="rbx-tm-row rbx-tm-block rbx-tm-bare">
           <ul class="rbx-tm-log" data-role="log"></ul>
           <p class="rbx-tm-empty" data-role="log-empty">No requests recorded.</p>
         </div>
         <div class="rbx-tm-row">
-          <span class="rbx-tm-label">Log</span>
+          <span class="rbx-tm-label text-label">Log</span>
           <span class="rbx-tm-right rbx-tm-chips">
-            <button class="rbx-tm-btn" data-act="clear-log" type="button">Clear</button>
+            <button class="rbx-tm-btn btn-control-xs" data-act="clear-log" type="button">Clear</button>
           </span>
         </div>
       </div>
@@ -2058,18 +2067,20 @@
   }
 
   function invHtml() {
-    return state.owned.slice().reverse().map(it =>
-      '<div class="rbx-tm-item">' +
-        (it.thumb ? '<img src="' + esc(it.thumb) + '" alt="" />' : '<img alt="" />') +
-        '<div class="rbx-tm-item-body">' +
-          '<div class="rbx-tm-item-name">' + esc(it.name || 'Simulated item') + '</div>' +
-          '<div class="rbx-tm-item-price">' + ROBUX_ICON + fmt(it.price) + '</div>' +
-          '<button type="button" class="rbx-tm-wear' + (isWorn(it.assetId) ? ' rbx-tm-on' : '') +
-            '" data-wear="' + esc(it.assetId) + '">' +
-            (isWorn(it.assetId) ? 'Worn' : 'Wear') + '</button>' +
+    return state.owned.slice().reverse().map(it => {
+      const porte = isWorn(it.assetId);
+      return '<div class="rbx-tm-item item-card">' +
+        (it.thumb ? '<img class="item-card-thumb" src="' + esc(it.thumb) + '" alt="" />'
+                  : '<img class="item-card-thumb" alt="" />') +
+        '<div class="rbx-tm-item-body item-card-caption">' +
+          '<div class="rbx-tm-item-name item-card-name">' + esc(it.name || 'Simulated item') + '</div>' +
+          '<div class="rbx-tm-item-price item-card-price">' + ROBUX_ICON + fmt(it.price) + '</div>' +
+          '<button type="button" class="rbx-tm-wear ' +
+            (porte ? 'btn-primary-xs' : 'btn-control-xs') +
+            '" data-wear="' + esc(it.assetId) + '">' + (porte ? 'Worn' : 'Wear') + '</button>' +
         '</div>' +
-      '</div>'
-    ).join('');
+      '</div>';
+    }).join('');
   }
 
   function renderPanel() {
