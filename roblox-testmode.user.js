@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.6
+// @version      2.7
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.6';
+  const VERSION = '2.7';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -2365,7 +2365,8 @@
       html = html.slice(0, CAPTURE_MAX) + '\n<!-- tronqué à ' + CAPTURE_MAX + ' caractères -->';
     }
 
-    const entete = '<!-- ' + location.pathname + ' — capturé depuis « ' +
+    const entete = '<!-- TEST MODE v' + VERSION + ' — ' + location.pathname +
+      ' — capturé depuis « ' +
       (cible.id ? '#' + cible.id : cible.className || cible.tagName) + ' » -->\n';
     const sortie = entete + html;
 
@@ -2394,6 +2395,7 @@
   }
 
   window.rbxTest = {
+    version: VERSION,
     state,
     reset() { localStorage.removeItem(STORAGE_KEY); location.reload(); },
     setBalance(n) { state.balance = Math.max(0, Number(n) || 0); save(); paintBalance(); renderPanel(); },
