@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.3
+// @version      2.4
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.3';
+  const VERSION = '2.4';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -2323,11 +2323,57 @@
   else document.addEventListener('DOMContentLoaded', start);
 
   // ---------- 9. API CONSOLE ----------
+
+  // Reproduire la page « possédé » à partir de captures d'écran ne suffit pas :
+  // il manque la structure. Cette commande la relève et la met dans le
+  // presse-papiers, pour pouvoir la transmettre telle quelle.
+  const CAPTURE_MAX = 80000;
+
+  function capturerPage() {
+    const zones = [
+      '#item-container', '.item-details', '.item-container',
+      '[class*="item-details" i]', '#content'
+    ];
+
+    let cible = null;
+    for (const sel of zones) {
+      cible = document.querySelector(sel);
+      if (cible) break;
+    }
+    if (!cible) cible = document.body;
+
+    // On travaille sur une copie : la page affichée n'est pas touchée.
+    const copie = cible.cloneNode(true);
+    copie.querySelectorAll('script, noscript, style, link').forEach(el => el.remove());
+    copie.querySelectorAll('#' + PANEL_ID + ', #rbx-tm-version, #rbx-tm-owned')
+      .forEach(el => el.remove());
+
+    let html = copie.outerHTML;
+    if (html.length > CAPTURE_MAX) {
+      html = html.slice(0, CAPTURE_MAX) + '\n<!-- tronqué à ' + CAPTURE_MAX + ' caractères -->';
+    }
+
+    const entete = '<!-- ' + location.pathname + ' — capturé depuis « ' +
+      (cible.id ? '#' + cible.id : cible.className || cible.tagName) + ' » -->\n';
+    const sortie = entete + html;
+
+    try {
+      navigator.clipboard.writeText(sortie).then(
+        () => console.log('[TEST MODE] page copiée dans le presse-papiers (' +
+                          sortie.length + ' caractères). Colle-la dans la conversation.'),
+        () => console.log('[TEST MODE] presse-papiers refusé — copie la valeur renvoyée ci-dessous.'));
+    } catch {
+      console.log('[TEST MODE] presse-papiers indisponible — copie la valeur renvoyée ci-dessous.');
+    }
+    return sortie;
+  }
+
   window.rbxTest = {
     state,
     reset() { localStorage.removeItem(STORAGE_KEY); location.reload(); },
     setBalance(n) { state.balance = Math.max(0, Number(n) || 0); save(); paintBalance(); renderPanel(); },
     panel() { panelForced = true; panelClosed = false; mountPanel(); },
+    capture: capturerPage,
     lookup: lookupUser,
     async spoof(username) {
       state.spoof = Object.assign(await lookupUser(username), { active: true });
