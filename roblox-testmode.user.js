@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.1
+// @version      2.2
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.1';
+  const VERSION = '2.2';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -76,10 +76,25 @@
     '<path fill="currentColor" fill-rule="evenodd" d="M12 1.5 21.09 6.75v10.5L12 22.5 2.91 17.25V6.75L12 1.5Z' +
     'M12 7 7.67 9.5v5L12 17l4.33-2.5v-5L12 7Z"/></svg>';
 
-  const CHECK_ICON =
+  const CHECK_SVG =
     '<svg class="rbx-tm-check" viewBox="0 0 24 24" aria-hidden="true">' +
     '<circle cx="12" cy="12" r="10" fill="#00b06f"/>' +
     '<path fill="#fff" d="m10.6 16.2-4-4 1.4-1.4 2.6 2.6 5.4-5.4 1.4 1.4z"/></svg>';
+
+  // Roblox a sa propre pastille de possession, `icon-shop-owned`. On la place,
+  // puis on vérifie qu'elle donne bien une image : sur une page où la feuille
+  // de style ne la fournit pas, elle resterait invisible et on retombe alors
+  // sur notre dessin.
+  const CHECK_ICON = '<span class="icon-shop-owned rbx-tm-check-native"></span>';
+
+  function verifierIconeNative(racine) {
+    const natif = racine.querySelector('.rbx-tm-check-native');
+    if (!natif) return;
+    const style = getComputedStyle(natif);
+    const invisible = style.backgroundImage === 'none' &&
+                      (parseFloat(style.width) < 4 || parseFloat(style.height) < 4);
+    if (invisible) natif.outerHTML = CHECK_SVG;
+  }
 
   const VERIFIED_ICON =
     '<svg class="rbx-tm-verified" viewBox="0 0 24 24" aria-label="Verified account">' +
@@ -1717,15 +1732,24 @@
 
     choisi.insertAdjacentHTML('beforeend',
       '<span class="rbx-tm-owned-badge">' + CHECK_ICON + '<span>Item Owned</span></span>');
+    verifierIconeNative(choisi);
   }
 
   // La zone d'achat cède la place à « This item is available in your inventory. »
   function ownedArea() {
     if (document.getElementById('rbx-tm-owned')) return;
 
-    const boutons = Array.prototype.filter.call(
+    // `purchase-button` est la classe du site : plus sûre que le libellé, qui
+    // dépend de la langue. Le texte reste le repli, et couvre « Add to Cart ».
+    const parClasse = Array.prototype.filter.call(
+      document.querySelectorAll('.purchase-button, .purchase-button-link'),
+      el => !el.closest('#' + PANEL_ID));
+
+    const parTexte = Array.prototype.filter.call(
       document.querySelectorAll('button, a[role="button"], [data-testid*="purchase" i]'),
       el => !el.closest('#' + PANEL_ID) && ACTION_TEXT_RE.test(normalise(el.textContent)));
+
+    const boutons = [...new Set(parClasse.concat(parTexte))];
     if (!boutons.length) return;
 
     for (const b of boutons) b.style.display = 'none';
@@ -1744,6 +1768,7 @@
 
     const ancre = boutons[0];
     ancre.parentElement.insertBefore(bloc, ancre);
+    bloc.classList.add('item-details');
   }
 
   // ---------- 6 bis 2. PASTILLE DE VERSION ----------
