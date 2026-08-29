@@ -1,36 +1,54 @@
 # Roblox TEST MODE — Chrome extension
 
-Loads the test-mode script into roblox.com and keeps it up to date on its own.
+Injects the test-mode script into roblox.com. It tries two paths, in order.
 
-The script is **not** bundled here. The service worker downloads it from GitHub
-and registers it through `chrome.userScripts`, the only API that accepts remote
-code in the page's own context and is exempt from the site's Content Security
-Policy. That is what makes automatic updates possible without repacking the
-extension. It checks hourly, on browser start, and whenever you click the
-toolbar icon. If the download fails, the last working version stays registered.
+**1. Remote, self-updating.** The service worker downloads the script from
+GitHub and registers it through `chrome.userScripts`, the only API that accepts
+remote code in the page's own context and is exempt from the site's Content
+Security Policy. It checks on every service-worker start, hourly, and when you
+click the toolbar icon. A response that does not look like the script never
+replaces the cached one.
+
+**2. Bundled, static.** If user scripts are not allowed for this extension,
+`payload.js` — the copy shipped in this folder — is registered instead through
+`chrome.scripting`, also in the MAIN world. It works with no extra setting, but
+it does not update. The extension switches back to path 1 by itself as soon as
+that becomes possible, and never runs both at once.
+
+The badge on the toolbar icon says which path is live: green `v1.9` for the
+updating copy, orange `BND` for the bundled one, red `ERR` if nothing could be
+injected.
 
 ## Install
 
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked** and select this folder.
-4. Open this extension's **Details** and turn on **Allow User Scripts**.
-   On Chrome versions that don't show that switch, Developer mode alone is enough.
-5. Open roblox.com. The panel appears at the top of **Settings** and **Inventory**.
+4. Open roblox.com. The panel is at the top of **Settings** and **Inventory**.
 
-Step 4 matters: without it `chrome.userScripts` is unavailable, nothing is
-injected, and the service worker console says so.
+For automatic updates, also open this extension's **Details** and turn on
+**Allow User Scripts**. Without it the extension still works, on the bundled
+copy.
 
-## Check it is working
+## If nothing happens
 
 On `chrome://extensions`, click **service worker** under this extension to open
-its console. It logs the version it registered. Clicking the toolbar icon forces
-a check and shows the version on the badge.
+its console. It prints exactly which path it took and why. The same message is
+kept in storage:
 
-On roblox.com, the browser console gives you `rbxTest.state`, `rbxTest.panel()`,
-`rbxTest.setBalance(n)`, `rbxTest.spoof('username')`.
+```js
+chrome.storage.local.get('statut').then(console.log)
+```
 
-## Do not also install the userscript
+On roblox.com, the page console gives you `rbxTest.state`, `rbxTest.panel()`,
+`rbxTest.setBalance(n)`, `rbxTest.spoof('username')`. If `rbxTest` is undefined,
+nothing was injected.
 
-If Tampermonkey already runs the same script, you would get two copies. The
-script guards against double interception, but keep just one.
+## Keeping payload.js current
+
+`payload.js` is a copy of `../roblox-testmode.user.js`. It only matters when the
+bundled path is in use. To refresh it:
+
+```sh
+cp ../roblox-testmode.user.js payload.js
+```
