@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.9
+// @version      3.0
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.9';
+  const VERSION = '3.0';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -1769,7 +1769,8 @@
       titre.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) || candidats[0];
 
     choisi.insertAdjacentHTML('beforeend',
-      '<span class="rbx-tm-owned-badge">' + CHECK_ICON + '<span>Item Owned</span></span>');
+      '<span class="item-owned rbx-tm-owned-badge">' + CHECK_ICON +
+      '<span>Item Owned</span></span>');
     verifierIconeNative(choisi);
   }
 
