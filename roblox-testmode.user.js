@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.5
+// @version      2.6
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.5';
+  const VERSION = '2.6';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -2330,17 +2330,29 @@
   const CAPTURE_MAX = 80000;
 
   function capturerPage() {
-    const zones = [
-      '#item-container', '.item-details', '.item-container',
-      '[class*="item-details" i]', '#content'
-    ];
+    // Une correspondance partielle attrapait « item-details-thumbnail-container »,
+    // c'est-à-dire la colonne de l'image, et manquait celle qui compte. On vise
+    // donc d'abord des conteneurs exacts, puis on remonte depuis le titre
+    // jusqu'à l'ancêtre qui englobe aussi la zone d'achat.
+    const EXACTS = ['#item-container', '.item-container', '.item-details'];
+    const REPERES = '.purchase-button, .purchase-button-link, [class*="item-details" i]';
 
     let cible = null;
-    for (const sel of zones) {
+    for (const sel of EXACTS) {
       cible = document.querySelector(sel);
       if (cible) break;
     }
-    if (!cible) cible = document.body;
+
+    if (!cible) {
+      const titre = document.querySelector('h1');
+      let noeud = titre;
+      for (let i = 0; noeud && i < 10; i++) {
+        if (noeud.querySelector(REPERES) && noeud.querySelector('h1')) { cible = noeud; break; }
+        noeud = noeud.parentElement;
+      }
+    }
+
+    if (!cible) cible = document.querySelector('#content') || document.body;
 
     // On travaille sur une copie : la page affichée n'est pas touchée.
     const copie = cible.cloneNode(true);
