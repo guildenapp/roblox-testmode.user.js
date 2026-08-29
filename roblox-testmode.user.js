@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.2
+// @version      2.3
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.2';
+  const VERSION = '2.3';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -81,19 +81,32 @@
     '<circle cx="12" cy="12" r="10" fill="#00b06f"/>' +
     '<path fill="#fff" d="m10.6 16.2-4-4 1.4-1.4 2.6 2.6 5.4-5.4 1.4 1.4z"/></svg>';
 
-  // Roblox a sa propre pastille de possession, `icon-shop-owned`. On la place,
-  // puis on vérifie qu'elle donne bien une image : sur une page où la feuille
-  // de style ne la fournit pas, elle resterait invisible et on retombe alors
-  // sur notre dessin.
-  const CHECK_ICON = '<span class="icon-shop-owned rbx-tm-check-native"></span>';
+  // La vraie pastille du site : une coche blanche, tirée de son sprite, sur un
+  // rond vert dont la couleur vient de sa propre variable via `bg-system-success`.
+  // Le rond n'existe pas comme classe : c'est la seule partie qu'on dessine.
+  const CHECK_ICON =
+    '<span class="rbx-tm-check-circle bg-system-success">' +
+    '<span class="icon-checkmark-white-bold rbx-tm-check-native"></span></span>';
 
+  const TRANSPARENT = /^(transparent|rgba\(0,\s*0,\s*0,\s*0\))$/;
+
+  // Les deux morceaux empruntés peuvent manquer selon la page. On vérifie donc
+  // qu'ils rendent quelque chose, plutôt que de laisser une pastille vide.
   function verifierIconeNative(racine) {
     const natif = racine.querySelector('.rbx-tm-check-native');
     if (!natif) return;
-    const style = getComputedStyle(natif);
-    const invisible = style.backgroundImage === 'none' &&
-                      (parseFloat(style.width) < 4 || parseFloat(style.height) < 4);
-    if (invisible) natif.outerHTML = CHECK_SVG;
+
+    if (getComputedStyle(natif).backgroundImage === 'none') {
+      // Sprite absent : on remplace toute la pastille par notre dessin.
+      const rond = natif.closest('.rbx-tm-check-circle') || natif;
+      rond.outerHTML = CHECK_SVG;
+      return;
+    }
+
+    const rond = natif.closest('.rbx-tm-check-circle');
+    if (rond && TRANSPARENT.test(getComputedStyle(rond).backgroundColor)) {
+      rond.style.background = '#00b06f';   // variable de couleur absente
+    }
   }
 
   const VERIFIED_ICON =
@@ -346,6 +359,14 @@
         margin-left: 12px; font-weight: 600; font-size: 16px;
       }
       .rbx-tm-check { width: 20px; height: 20px; flex: none; }
+      .rbx-tm-check-circle {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 20px; height: 20px; border-radius: 50%; flex: none;
+      }
+      .rbx-tm-check-circle .rbx-tm-check-native {
+        display: block; width: 16px; height: 16px;
+        background-repeat: no-repeat;
+      }
 
       /* Badge de certification injecté dans la page, hors panneau. */
       .rbx-tm-verified {
