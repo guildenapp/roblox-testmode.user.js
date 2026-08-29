@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      2.4
+// @version      2.5
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '2.4';
+  const VERSION = '2.5';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -2357,14 +2357,27 @@
       (cible.id ? '#' + cible.id : cible.className || cible.tagName) + ' » -->\n';
     const sortie = entete + html;
 
+    // Le presse-papiers est refusé quand c'est la console qui a le focus, et
+    // un long balisage se colle mal de toute façon : on produit un fichier.
     try {
-      navigator.clipboard.writeText(sortie).then(
-        () => console.log('[TEST MODE] page copiée dans le presse-papiers (' +
-                          sortie.length + ' caractères). Colle-la dans la conversation.'),
-        () => console.log('[TEST MODE] presse-papiers refusé — copie la valeur renvoyée ci-dessous.'));
-    } catch {
-      console.log('[TEST MODE] presse-papiers indisponible — copie la valeur renvoyée ci-dessous.');
+      const nom = 'roblox-page' + location.pathname.replace(/[^\w-]+/g, '-') + '.html';
+      const url = URL.createObjectURL(new Blob([sortie], { type: 'text/html' }));
+      const lien = document.createElement('a');
+      lien.href = url;
+      lien.download = nom;
+      document.body.appendChild(lien);
+      lien.click();
+      lien.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      console.log('[TEST MODE] ' + nom + ' téléchargé (' + sortie.length +
+                  ' caractères). Envoie ce fichier dans la conversation.');
+    } catch (e) {
+      console.warn('[TEST MODE] téléchargement impossible :', e.message);
     }
+
+    // Le presse-papiers reste tenté, au cas où la page ait le focus.
+    try { navigator.clipboard.writeText(sortie).catch(() => {}); } catch { /* refusé */ }
+
     return sortie;
   }
 
