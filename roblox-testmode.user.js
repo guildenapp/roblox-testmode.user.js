@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Roblox TEST MODE — faux solde + achats simulés
 // @namespace    perso-test
-// @version      3.2
+// @version      3.3
 // @downloadURL  https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @updateURL    https://raw.githubusercontent.com/guildenapp/roblox-testmode.user.js/main/roblox-testmode.user.js
 // @description  Bac à sable local : faux solde, achats simulés conservés dans l'inventaire, identité empruntée à un profil public. Rien n'est envoyé à Roblox.
@@ -21,7 +21,7 @@
 
   // Doit rester identique à « @version » ci-dessus : un test le vérifie, parce
   // que l'oubli s'est déjà produit et rend une mise à jour indétectable.
-  const VERSION = '3.2';
+  const VERSION = '3.3';
 
   // ---------- CONFIG ----------
   const FAKE_BALANCE = 2000000;   // solde par défaut au premier lancement
@@ -1800,8 +1800,35 @@
   }
 
   // La zone d'achat cède la place à « This item is available in your inventory. »
+  // Sur la page réelle, l'état possédé ne s'ajoute pas : il remplace le contenu
+  // de la ligne de prix. Le texte va dans `price-container-text` > `item-first-line`,
+  // et le bouton de droite mène à l'éditeur d'avatar, pas à l'inventaire.
+  const PRICE_ROW = '.price-row-container';
+  const OWNED_TEXT = 'This item is available in your inventory.';
+
+  const OWNED_ROW_HTML =
+    '<div class="price-container-text"><div class="item-first-line">' + OWNED_TEXT + '</div></div>' +
+    '<a id="edit-avatar-button" href="/my/avatar" class="btn-control-md">' +
+    '<span class="icon-nav-charactercustomizer"></span></a>';
+
   function ownedArea() {
-    if (document.getElementById('rbx-tm-owned')) return;
+    if (document.querySelector('[data-rbx-owned]') || document.getElementById('rbx-tm-owned')) return;
+
+    // Chemin fidèle : la ligne de prix existe, on la met dans son état possédé.
+    const ligne = Array.prototype.find.call(
+      document.querySelectorAll(PRICE_ROW), el => !el.closest('#' + PANEL_ID));
+
+    if (ligne) {
+      // Roblox l'affiche déjà ainsi quand l'article est réellement possédé.
+      if (ligne.querySelector('.item-first-line') && /inventory/i.test(ligne.textContent)) {
+        ligne.dataset.rbxOwned = 'natif';
+        return;
+      }
+      ligne.dataset.rbxOwned = 'simule';
+      ligne.innerHTML = OWNED_ROW_HTML;
+      masquerAchats(ligne);
+      return;
+    }
 
     // `purchase-button` est la classe du site : plus sûre que le libellé, qui
     // dépend de la langue. Le texte reste le repli, et couvre « Add to Cart ».
@@ -1825,9 +1852,9 @@
     const bloc = document.createElement('div');
     bloc.id = 'rbx-tm-owned';
     bloc.innerHTML =
-      '<div class="rbx-tm-owned-row">' +
-        '<span class="rbx-tm-owned-text text-lead">This item is available in your inventory.</span>' +
-        '<a class="rbx-tm-owned-btn btn-control-md" href="' + inventaire + '">Inventory</a>' +
+      '<div class="rbx-tm-owned-row price-row-container">' +
+        '<div class="price-container-text"><div class="item-first-line">' + OWNED_TEXT + '</div></div>' +
+        '<a href="' + inventaire + '" class="rbx-tm-owned-btn btn-control-md">Inventory</a>' +
       '</div>';
 
     const ancre = boutons[0];
@@ -1913,6 +1940,20 @@
 
     fermerModale(modale);
     if (state.reloadAfterPurchase) scheduleReload('twostep:' + surLaPage[1]);
+  }
+
+  // Après remplacement de la ligne de prix, un bouton d'achat peut subsister
+  // ailleurs — « Add to Cart », par exemple.
+  function masquerAchats(saufDans) {
+    document.querySelectorAll('.purchase-button, .purchase-button-link, button, a[role="button"]')
+      .forEach(el => {
+        if (el.closest('#' + PANEL_ID)) return;
+        if (saufDans && saufDans.contains(el)) return;
+        if (!el.classList.contains('purchase-button') &&
+            !el.classList.contains('purchase-button-link') &&
+            !ACTION_TEXT_RE.test(normalise(el.textContent))) return;
+        el.style.display = 'none';
+      });
   }
 
   function fermerModale(modale) {
